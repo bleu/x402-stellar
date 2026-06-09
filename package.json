@@ -18,21 +18,19 @@
   },
   "pnpm": {
     "overrides": {
-      "lodash": "4.18.1",
       "typescript": "^5.9.3",
-      "axios": "^1.15.2",
+      "axios": "^1.16.1",
       "protobufjs": "^7.5.6",
-      "ip-address": "^10.1.1",
-      "follow-redirects": "^1.16.0",
-      "uuid": "^14.0.0"
+      "uuid": "^14.0.0",
+      "ws@8": "^8.21.0"
     }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.1.0",
-    "prettier": "^3.8.1",
-    "turbo": "^2.9.14",
+    "eslint": "^10.4.1",
+    "prettier": "^3.8.3",
+    "turbo": "^2.9.16",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.58.0"
+    "typescript-eslint": "^8.60.1"
   }
 }
