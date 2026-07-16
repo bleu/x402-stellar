@@ -56,18 +56,20 @@ jobs:
 
       - name: Slack notification — success
         if: success()
-        uses: slackapi/slack-github-action@fcfb566f8b0aab22203f066d80ca1d7e4b5d05b3 # v1.27.1
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
-          channel-id: ${{ env.SLACK_CHANNEL }}
-          slack-message: "${{ env.APP_NAME }} *prd* build complete for ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}. ${{ env.APP_NAME }} available at ${{ env.CLIENT_URL }}."
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ env.SLACK_CHANNEL }}
+            text: "Build complete. Repository: ${{ github.server_url }}/${{ github.repository }} Commit: ${{ github.sha }}."
 
       - name: Slack notification — failure
         if: failure()
-        uses: slackapi/slack-github-action@fcfb566f8b0aab22203f066d80ca1d7e4b5d05b3 # v1.27.1
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
-          channel-id: ${{ env.SLACK_CHANNEL }}
-          slack-message: "${{ env.APP_NAME }} *prd* build failed for ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}."
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ env.SLACK_CHANNEL }}
+            text: "Build failed. Repository: ${{ github.server_url }}/${{ github.repository }} Commit: ${{ github.sha }}."
