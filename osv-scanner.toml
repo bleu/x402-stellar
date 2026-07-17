@@ -1,0 +1,24 @@
+# OSV-Scanner configuration
+# Docs: https://google.github.io/osv-scanner/configuration/
+#
+# The CI "Audit dependencies (OSV-Scanner)" step blocks on ANY known
+# vulnerability in pnpm-lock.yaml, regardless of severity. Use this file to
+# silence advisories that are non-actionable for us (no fix available, not
+# reachable, false positive, etc.) so the gate stays meaningful.
+#
+# Prefer ignoring specific advisory IDs over lowering the whole gate. Always
+# give a reason, and set ignoreUntil so ignores get periodically re-reviewed
+# rather than lingering forever.
+
+# --- Example: ignore a specific advisory ---
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"        # GHSA or OSV/CVE id from the scan output
+# ignoreUntil = 2026-10-01          # optional; re-evaluate after this date
+# reason = "No upstream fix yet; vulnerable code path is not reachable from our usage."
+
+# --- Example: override / ignore all vulns for a single package ---
+# [[PackageOverrides]]
+# name = "some-package"
+# ecosystem = "npm"
+# vulnerability.ignore = true
+# reason = "Transitive dev-only dependency; not shipped."
