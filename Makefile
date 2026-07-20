@@ -10,6 +10,9 @@ FACILITATOR_TAG ?= x402-stellar-facilitator:$(LABEL)
 SERVER_TAG      ?= x402-stellar-server:$(LABEL)
 CLIENT_TAG      ?= x402-stellar-client:$(LABEL)
 
+# Pinned to match the OSV-Scanner version used in CI (.github/workflows/test.yml)
+OSV_SCANNER_IMAGE ?= ghcr.io/google/osv-scanner:v2.3.8
+
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
@@ -43,8 +46,9 @@ typecheck: ## Type check the project
 test: ## Run tests
 	pnpm test
 
-audit: ## Check dependencies for high/critical vulnerabilities
-	pnpm audit --audit-level high
+audit: ## Scan dependencies for known vulnerabilities (OSV-Scanner, mirrors CI)
+	$(SUDO) docker run --rm -v "$(CURDIR):/src" -w /src $(OSV_SCANNER_IMAGE) \
+		--config=osv-scanner.toml --lockfile=pnpm-lock.yaml
 
 check: install format lint typecheck test audit build ## Install, run all checks (format, lint, typecheck, test, audit), and build
 
