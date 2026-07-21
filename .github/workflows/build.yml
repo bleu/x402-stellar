@@ -1,0 +1,75 @@
+name: Build and push x402-stellar
+
+# Deployed to: https://github.com/stellar/x402-stellar
+#
+# Converted from the Jenkins pipeline (Jenkinsfile). On every push to main
+# (or manual dispatch) builds the x402-stellar server and client docker images
+# and pushes them to the prd ECR repos. Production deploys require manual
+# approval, enforced by the `production` environment's required reviewers.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  APP_NAME: x402-stellar
+  SLACK_CHANNEL: alerts-devx
+  CLIENT_URL: https://stellar.org/x402-demo
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    # Gates production deploys on manual approval (Jenkins "Deploy to production?" input).
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine image label
+        id: vars
+        run: echo "label=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: ECR login
+        id: ecr-login
+        uses: stellar/actions/sdf-ecr-login@main
+
+      - name: Build and push docker images
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.ecr-registry }}
+          LABEL: ${{ steps.vars.outputs.label }}
+        run: |
+          set -eu
+          export SERVER_TAG="${ECR_REGISTRY}/prd/${APP_NAME}-server:${LABEL}"
+          export CLIENT_TAG="${ECR_REGISTRY}/prd/${APP_NAME}-client:${LABEL}"
+
+          make docker-build-server
+          make docker-build-client
+
+          ecr-push "${SERVER_TAG}"
+          ecr-push "${CLIENT_TAG}"
+
+      - name: Slack notification — success
+        if: success()
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ env.SLACK_CHANNEL }}
+            text: "Build complete. Repository: ${{ github.server_url }}/${{ github.repository }} Commit: ${{ github.sha }}."
+
+      - name: Slack notification — failure
+        if: failure()
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ env.SLACK_CHANNEL }}
+            text: "Build failed. Repository: ${{ github.server_url }}/${{ github.repository }} Commit: ${{ github.sha }}."
