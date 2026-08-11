@@ -2,14 +2,20 @@
 
 Express service that verifies and settles [x402](https://www.x402.org/) payments on the Stellar network. A paywall server forwards payment headers here; the facilitator checks the transaction is valid and submits it on-chain.
 
+The service is one process composed of two modules under `src/modules/`:
+
+- **facilitator** — the x402 protocol endpoints (`/verify`, `/settle`, `/supported`), a thin shell over `@x402/stellar`'s `ExactStellarScheme`, which owns all payload validation and settlement machinery.
+- **catalog** — optional resource discovery backed by Postgres. When `DATABASE_URL` is set, resources seen in successful settlements are recorded (via the facilitator's after-settle hook) and served at `GET /discovery/resources` in the [x402 Bazaar](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md) list shape. Without `DATABASE_URL` the module is disabled and the facilitator runs fully stateless.
+
 ## Endpoints
 
-| Method | Path         | Description                           |
-| ------ | ------------ | ------------------------------------- |
-| POST   | `/verify`    | Validate a payment payload            |
-| POST   | `/settle`    | Submit the transaction to the network |
-| GET    | `/supported` | List supported scheme/network pairs   |
-| GET    | `/health`    | Health check                          |
+| Method | Path                    | Description                                    |
+| ------ | ----------------------- | ---------------------------------------------- |
+| POST   | `/verify`               | Validate a payment payload                     |
+| POST   | `/settle`               | Submit the transaction to the network          |
+| GET    | `/supported`            | List supported scheme/network pairs            |
+| GET    | `/discovery/resources`  | List cataloged resources (needs `DATABASE_URL`) |
+| GET    | `/health`               | Health check                                   |
 
 ## Quick Start
 
@@ -35,6 +41,17 @@ The facilitator listens on port 4022 by default.
 | `MAX_TRANSACTION_FEE_STROOPS`         | `50000` (library default)        | Max fee in stroops accepted from clients     |
 | `FACILITATOR_STELLAR_FEE_BUMP_SECRET` | --                               | Fee-bump signer secret (high-throughput)     |
 | `FACILITATOR_STELLAR_CHANNEL_SECRETS` | --                               | Channel account secrets, comma-separated     |
+| `DATABASE_URL`                        | --                               | Postgres URL; enables the catalog module     |
+
+A local Postgres for the catalog module ships in `docker-compose.yml`:
+
+```bash
+docker compose up -d postgres
+# then in .env:
+# DATABASE_URL=postgres://facilitator:facilitator@localhost:5442/facilitator
+```
+
+The schema is created automatically at startup.
 
 ## Operating Modes
 

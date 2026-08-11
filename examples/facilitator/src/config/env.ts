@@ -92,6 +92,14 @@ export class Env {
   }
 
   /**
+   * Optional Postgres connection string. When set, the catalog module is
+   * enabled: settled resources are recorded and served at /discovery/resources.
+   */
+  static get databaseUrl(): string | undefined {
+    return process.env.DATABASE_URL || undefined;
+  }
+
+  /**
    * Optional API key for authenticating requests to the facilitator.
    * When set, all /verify, /settle, and /supported requests must include an
    * `Authorization: Bearer <key>` header. Unset in dev mode = open access.
