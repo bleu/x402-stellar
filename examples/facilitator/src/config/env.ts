@@ -100,6 +100,14 @@ export class Env {
   }
 
   /**
+   * Optional deployed UptoSettlement contract id (`C...`). When set, the
+   * facilitator also serves the `upto` scheme backed by this contract.
+   */
+  static get uptoContractId(): string | undefined {
+    return process.env.UPTO_CONTRACT_ID?.trim() || undefined;
+  }
+
+  /**
    * Optional API key for authenticating requests to the facilitator.
    * When set, all /verify, /settle, and /supported requests must include an
    * `Authorization: Bearer <key>` header. Unset in dev mode = open access.
