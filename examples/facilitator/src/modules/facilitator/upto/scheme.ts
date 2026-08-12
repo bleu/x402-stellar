@@ -29,7 +29,8 @@ export interface UptoStellarSchemeOptions {
  * Facilitator handler for the `upto` scheme on Stellar, backed by the
  * UptoSettlement contract. Verify checks the payload against the requirements
  * and confirms the buyer's authorization simulates cleanly; settle submits the
- * settle call with the facilitator-chosen amount and returns the on-chain hash.
+ * settle call with the caller-supplied amount, capped by the buyer's signed
+ * maxAmount, and returns the on-chain hash.
  */
 export class UptoStellarScheme implements SchemeNetworkFacilitator {
   readonly scheme = "upto";
