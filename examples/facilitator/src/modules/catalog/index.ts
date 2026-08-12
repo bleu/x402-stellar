@@ -1,19 +1,13 @@
-import type { PaymentPayload, PaymentRequirements, SettleResponse } from "@x402/core/types";
+import type { FacilitatorSettleResultContext } from "@x402/core/facilitator";
 import { Router } from "express";
 
 import { logger } from "../../utils/logger.js";
 import { CatalogStore } from "./store.js";
 
-interface SettleResultContext {
-  paymentPayload: PaymentPayload;
-  requirements: PaymentRequirements;
-  result: SettleResponse;
-}
-
 export interface CatalogModule {
   router: Router;
   /** After-settle hook: records the paid resource. Never throws. */
-  recordSettlement(context: SettleResultContext): Promise<void>;
+  recordSettlement(context: FacilitatorSettleResultContext): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -70,6 +64,9 @@ export function createCatalogModule(store: CatalogStore): CatalogModule {
           accepts: [context.requirements as unknown as Record<string, unknown>],
           description: context.paymentPayload.resource?.description,
           mimeType: context.paymentPayload.resource?.mimeType,
+          serviceName: context.paymentPayload.resource?.serviceName,
+          tags: context.paymentPayload.resource?.tags,
+          iconUrl: context.paymentPayload.resource?.iconUrl,
         });
       } catch (error) {
         // Cataloging is a side effect; a store failure must not fail settlement.

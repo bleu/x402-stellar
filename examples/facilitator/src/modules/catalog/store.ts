@@ -9,6 +9,9 @@ export interface CatalogResource {
   lastUpdated: string;
   description?: string;
   mimeType?: string;
+  serviceName?: string;
+  tags?: string[];
+  iconUrl?: string;
 }
 
 export interface ListFilters {
@@ -40,21 +43,38 @@ export class CatalogStore {
         accepts       jsonb NOT NULL,
         description   text,
         mime_type     text,
+        service_name  text,
+        tags          jsonb,
+        icon_url      text,
         last_updated  timestamptz NOT NULL DEFAULT now()
       )
     `);
   }
 
+  /**
+   * One accepts entry per call (the requirements the settlement used). On
+   * conflict the entry for the same asset is replaced and other assets are
+   * kept, so multi-asset resources accumulate options with fresh amounts.
+   * Options a server stops accepting linger until declaration-based
+   * population (STE-61) replaces settlement observation.
+   */
   async upsert(resource: Omit<CatalogResource, "lastUpdated">): Promise<void> {
     await this.pool.query(
-      `INSERT INTO catalog_resources (resource, type, x402_version, accepts, description, mime_type, last_updated)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, now())
+      `INSERT INTO catalog_resources (resource, type, x402_version, accepts, description, mime_type, service_name, tags, icon_url, last_updated)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8::jsonb, $9, now())
        ON CONFLICT (resource) DO UPDATE SET
          type = EXCLUDED.type,
          x402_version = EXCLUDED.x402_version,
-         accepts = EXCLUDED.accepts,
+         accepts = (
+           SELECT coalesce(jsonb_agg(entry), '[]'::jsonb)
+           FROM jsonb_array_elements(catalog_resources.accepts) entry
+           WHERE entry->>'asset' IS DISTINCT FROM EXCLUDED.accepts->0->>'asset'
+         ) || EXCLUDED.accepts,
          description = EXCLUDED.description,
          mime_type = EXCLUDED.mime_type,
+         service_name = EXCLUDED.service_name,
+         tags = EXCLUDED.tags,
+         icon_url = EXCLUDED.icon_url,
          last_updated = now()`,
       [
         resource.resource,
@@ -63,6 +83,9 @@ export class CatalogStore {
         JSON.stringify(resource.accepts),
         resource.description ?? null,
         resource.mimeType ?? null,
+        resource.serviceName ?? null,
+        resource.tags ? JSON.stringify(resource.tags) : null,
+        resource.iconUrl ?? null,
       ],
     );
   }
@@ -93,7 +116,7 @@ export class CatalogStore {
 
     params.push(filters.limit, filters.offset);
     const rowsResult = await this.pool.query(
-      `SELECT resource, type, x402_version, accepts, description, mime_type, last_updated
+      `SELECT resource, type, x402_version, accepts, description, mime_type, service_name, tags, icon_url, last_updated
        FROM catalog_resources ${whereSql}
        ORDER BY last_updated DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -108,6 +131,9 @@ export class CatalogStore {
       lastUpdated: row.last_updated.toISOString(),
       ...(row.description ? { description: row.description } : {}),
       ...(row.mime_type ? { mimeType: row.mime_type } : {}),
+      ...(row.service_name ? { serviceName: row.service_name } : {}),
+      ...(row.tags ? { tags: row.tags } : {}),
+      ...(row.icon_url ? { iconUrl: row.icon_url } : {}),
     }));
 
     return { items, total: countResult.rows[0].total };

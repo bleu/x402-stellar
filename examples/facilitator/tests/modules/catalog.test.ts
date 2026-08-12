@@ -48,7 +48,13 @@ function settleContext(overrides: Record<string, unknown> = {}) {
   return {
     paymentPayload: {
       x402Version: 2,
-      resource: { url: "https://api.example.com/weather", description: "Weather" },
+      resource: {
+        url: "https://api.example.com/weather",
+        description: "Weather",
+        serviceName: "Weather API",
+        tags: ["weather", "forecast"],
+        iconUrl: "https://api.example.com/icon.png",
+      },
       accepted: requirements,
       payload: {},
     },
@@ -77,6 +83,9 @@ describe("catalog module", () => {
       accepts: [requirements],
       description: "Weather",
       mimeType: undefined,
+      serviceName: "Weather API",
+      tags: ["weather", "forecast"],
+      iconUrl: "https://api.example.com/icon.png",
     });
   });
 
@@ -157,8 +166,6 @@ describe("catalog module", () => {
       .query({ limit: "-5", offset: "nope" });
 
     expect(res.status).toBe(200);
-    expect(store.list).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 100, offset: 0 }),
-    );
+    expect(store.list).toHaveBeenCalledWith(expect.objectContaining({ limit: 100, offset: 0 }));
   });
 });
