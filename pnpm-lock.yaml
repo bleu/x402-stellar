@@ -36,6 +36,25 @@ importers:
         specifier: ^8.60.1
         version: 8.60.1(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
 
+  contracts/driver:
+    dependencies:
+      '@stellar/stellar-sdk':
+        specifier: ^14.2.0
+        version: 14.6.1
+      dotenv:
+        specifier: ^17.4.2
+        version: 17.4.2
+    devDependencies:
+      '@types/node':
+        specifier: ^25.9.1
+        version: 25.9.1
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   examples/client-cli:
     dependencies:
       '@x402-stellar/shared':
@@ -260,25 +279,6 @@ importers:
         version: 4.1.8(@types/node@25.9.1)(@vitest/coverage-v8@4.1.8)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.0.16(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4))
 
   experiments/upto-2a:
-    dependencies:
-      '@stellar/stellar-sdk':
-        specifier: ^14.2.0
-        version: 14.6.1
-      dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
-    devDependencies:
-      '@types/node':
-        specifier: ^25.9.1
-        version: 25.9.1
-      tsx:
-        specifier: ^4.22.4
-        version: 4.22.4
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  experiments/upto-2b/driver:
     dependencies:
       '@stellar/stellar-sdk':
         specifier: ^14.2.0

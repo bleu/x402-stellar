@@ -1,5 +1,5 @@
 {
-  "name": "@x402-stellar/experiment-upto-2b-driver",
+  "name": "@x402-stellar/upto-settlement-driver",
   "private": true,
   "type": "module",
   "scripts": {

@@ -4,4 +4,4 @@ packages:
   - examples/*
   - examples/*/*
   - experiments/*
-  - experiments/*/*
+  - contracts/driver
