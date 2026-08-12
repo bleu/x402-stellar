@@ -3,5 +3,3 @@ packages:
   - packages/*
   - examples/*
   - examples/*/*
-  - experiments/*
-  - contracts/driver
