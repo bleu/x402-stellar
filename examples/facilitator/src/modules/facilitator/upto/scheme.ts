@@ -6,7 +6,8 @@ import type {
   SettleResponse,
   VerifyResponse,
 } from "@x402/core/types";
-import { Keypair, Networks, rpc, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { Keypair, rpc, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { getNetworkPassphrase } from "@x402/stellar";
 
 import { logger } from "../../../utils/logger.js";
 import { parseUptoPayload, settleOperation, type UptoAuthorization } from "./payload.js";
@@ -22,10 +23,6 @@ export interface UptoStellarSchemeOptions {
   network: Network;
   /** Max fee in stroops the facilitator will pay per settle. */
   maxTransactionFeeStroops?: number;
-}
-
-function passphraseFor(network: Network): string {
-  return network.endsWith(":testnet") ? Networks.TESTNET : Networks.PUBLIC;
 }
 
 /**
@@ -51,7 +48,7 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     this.facilitator = Keypair.fromSecret(options.facilitatorSecret);
     this.server = new rpc.Server(options.rpcUrl);
     this.network = options.network;
-    this.passphrase = passphraseFor(options.network);
+    this.passphrase = getNetworkPassphrase(options.network);
     this.maxFeeStroops = options.maxTransactionFeeStroops ?? 100_000;
   }
 
@@ -73,7 +70,7 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     }
     const { authorization: auth, authEntryXdr } = parsed.payload;
 
-    const mismatch = this.checkRequirements(auth, requirements);
+    const mismatch = this.checkRequirements(payload, auth, requirements);
     if (mismatch) return mismatch;
 
     const amount = this.resolveAmount(parsed.payload);
@@ -94,7 +91,10 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
         return invalid("authorization_invalid", sim.error);
       }
     } catch (error) {
-      return invalid("authorization_invalid", error instanceof Error ? error.message : String(error));
+      return invalid(
+        "authorization_invalid",
+        error instanceof Error ? error.message : String(error),
+      );
     }
 
     return { isValid: true, payer: auth.from };
@@ -110,14 +110,22 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     }
     const { authorization: auth, authEntryXdr } = parsed.payload;
 
-    const mismatch = this.checkRequirements(auth, requirements);
+    const mismatch = this.checkRequirements(payload, auth, requirements);
     if (mismatch) {
-      return this.settleFailure(mismatch.invalidReason ?? "requirements_mismatch", mismatch.invalidMessage);
+      return this.settleFailure(
+        mismatch.invalidReason ?? "requirements_mismatch",
+        mismatch.invalidMessage,
+      );
     }
 
     const amount = this.resolveAmount(parsed.payload);
     if (amount === undefined) {
       return this.settleFailure("amount_exceeds_max", "settle amount exceeds the signed maxAmount");
+    }
+
+    const window = await this.checkWindow(auth);
+    if (window) {
+      return this.settleFailure(window.invalidReason ?? "expired", window.invalidMessage);
     }
 
     try {
@@ -164,27 +172,33 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     }
   }
 
-  private simulate(auth: UptoAuthorization, amount: bigint, authEntry: xdr.SorobanAuthorizationEntry) {
-    return this.server
-      .getAccount(this.facilitator.publicKey())
-      .then((account) => {
-        const tx = new TransactionBuilder(account, {
-          fee: this.maxFeeStroops.toString(),
-          networkPassphrase: this.passphrase,
-        })
-          .addOperation(settleOperation(this.contractId, auth, amount, authEntry))
-          .setTimeout(120)
-          .build();
-        return this.server.simulateTransaction(tx);
-      });
+  private simulate(
+    auth: UptoAuthorization,
+    amount: bigint,
+    authEntry: xdr.SorobanAuthorizationEntry,
+  ) {
+    return this.server.getAccount(this.facilitator.publicKey()).then((account) => {
+      const tx = new TransactionBuilder(account, {
+        fee: this.maxFeeStroops.toString(),
+        networkPassphrase: this.passphrase,
+      })
+        .addOperation(settleOperation(this.contractId, auth, amount, authEntry))
+        .setTimeout(120)
+        .build();
+      return this.server.simulateTransaction(tx);
+    });
   }
 
   private checkRequirements(
+    payload: PaymentPayload,
     auth: UptoAuthorization,
     requirements: PaymentRequirements,
   ): VerifyResponse | undefined {
-    if (requirements.scheme !== "upto") {
+    if (requirements.scheme !== "upto" || payload.accepted.scheme !== "upto") {
       return invalid("unsupported_scheme", `expected upto, got ${requirements.scheme}`);
+    }
+    if (requirements.network !== payload.accepted.network) {
+      return invalid("network_mismatch", "accepted network does not match requirements");
     }
     if (auth.asset !== requirements.asset) {
       return invalid("asset_mismatch", "authorization asset does not match requirements");
@@ -210,7 +224,10 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
   }
 
   /** Actual settle amount, defaulting to the cap; undefined when it exceeds the cap. */
-  private resolveAmount(payload: { authorization: UptoAuthorization; amount?: string }): bigint | undefined {
+  private resolveAmount(payload: {
+    authorization: UptoAuthorization;
+    amount?: string;
+  }): bigint | undefined {
     const cap = BigInt(payload.authorization.maxAmount);
     const amount = payload.amount === undefined ? cap : BigInt(payload.amount);
     if (amount < 0n || amount > cap) return undefined;

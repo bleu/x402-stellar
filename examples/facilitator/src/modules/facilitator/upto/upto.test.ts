@@ -49,7 +49,11 @@ function scheme(): UptoStellarScheme {
 }
 
 function payload(p: UptoStellarPayload): PaymentPayload {
-  return { x402Version: 2, accepted: requirements(), payload: p as unknown as Record<string, unknown> };
+  return {
+    x402Version: 2,
+    accepted: requirements(),
+    payload: p as unknown as Record<string, unknown>,
+  };
 }
 
 describe("parseUptoPayload", () => {

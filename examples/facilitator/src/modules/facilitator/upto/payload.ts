@@ -1,4 +1,5 @@
 import { Address, nativeToScVal, Operation, xdr } from "@stellar/stellar-sdk";
+import { validateStellarAssetAddress, validateStellarDestinationAddress } from "@x402/stellar";
 
 /**
  * The upto authorization the buyer signs. Every field here is covered by the
@@ -43,7 +44,9 @@ const SALT_HEX = /^[0-9a-fA-F]{64}$/;
  * Validates the raw payload shape and returns a typed payload, or an error
  * string describing the first problem found.
  */
-export function parseUptoPayload(raw: unknown): { payload: UptoStellarPayload } | { error: string } {
+export function parseUptoPayload(
+  raw: unknown,
+): { payload: UptoStellarPayload } | { error: string } {
   if (typeof raw !== "object" || raw === null) return { error: "payload must be an object" };
   const p = raw as Record<string, unknown>;
 
@@ -55,12 +58,16 @@ export function parseUptoPayload(raw: unknown): { payload: UptoStellarPayload } 
   }
 
   const a = p.authorization as Record<string, unknown> | undefined;
-  if (typeof a !== "object" || a === null) return { error: "payload.authorization must be an object" };
+  if (typeof a !== "object" || a === null)
+    return { error: "payload.authorization must be an object" };
 
-  for (const key of ["from", "payTo", "asset"] as const) {
-    if (typeof a[key] !== "string" || (a[key] as string).length === 0) {
-      return { error: `payload.authorization.${key} must be a non-empty string` };
+  for (const key of ["from", "payTo"] as const) {
+    if (typeof a[key] !== "string" || !validateStellarDestinationAddress(a[key] as string)) {
+      return { error: `payload.authorization.${key} must be a Stellar address` };
     }
+  }
+  if (typeof a.asset !== "string" || !validateStellarAssetAddress(a.asset)) {
+    return { error: "payload.authorization.asset must be a Stellar asset contract address" };
   }
   if (!isAtomicAmount(a.maxAmount)) {
     return { error: "payload.authorization.maxAmount must be a non-negative integer string" };

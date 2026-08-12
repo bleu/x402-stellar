@@ -1,12 +1,6 @@
 import { randomBytes } from "node:crypto";
-import {
-  authorizeEntry,
-  Keypair,
-  Networks,
-  rpc,
-  TransactionBuilder,
-  xdr,
-} from "@stellar/stellar-sdk";
+import { authorizeEntry, Keypair, rpc, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { getNetworkPassphrase } from "@x402/stellar";
 
 import { settleOperation, type UptoAuthorization, type UptoStellarPayload } from "./payload.js";
 
@@ -37,9 +31,11 @@ export interface BuildUptoPayloadParams {
  * `approve`, so the same signature settles any amount up to the cap. Nothing is
  * submitted here — only a read-only simulation to obtain the entry to sign.
  */
-export async function buildUptoPayload(params: BuildUptoPayloadParams): Promise<UptoStellarPayload> {
+export async function buildUptoPayload(
+  params: BuildUptoPayloadParams,
+): Promise<UptoStellarPayload> {
   const buyer = Keypair.fromSecret(params.buyerSecret);
-  const passphrase = params.network.endsWith(":testnet") ? Networks.TESTNET : Networks.PUBLIC;
+  const passphrase = getNetworkPassphrase(params.network);
   const server = new rpc.Server(params.rpcUrl);
 
   const { sequence: ledger } = await server.getLatestLedger();
@@ -77,8 +73,7 @@ export async function buildUptoPayload(params: BuildUptoPayloadParams): Promise<
 
   const entries = sim.result?.auth ?? [];
   const buyerEntries = entries.filter(
-    (e) =>
-      e.credentials().switch() === xdr.SorobanCredentialsType.sorobanCredentialsAddress(),
+    (e) => e.credentials().switch() === xdr.SorobanCredentialsType.sorobanCredentialsAddress(),
   );
   if (buyerEntries.length !== 1) {
     throw new Error(`expected exactly one buyer auth entry, got ${buyerEntries.length}`);

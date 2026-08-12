@@ -11,8 +11,9 @@
  * MERCHANT_ADDRESS, UPTO_CONTRACT_ID (or CONTRACT_ID), optional STELLAR_RPC_URL,
  * STELLAR_NETWORK, ASSET_CODE, ASSET_ISSUER, CAP, ACTUAL.
  */
-import { Asset, Keypair, Networks } from "@stellar/stellar-sdk";
+import { Asset, Keypair } from "@stellar/stellar-sdk";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
+import { getNetworkPassphrase } from "@x402/stellar";
 
 import { buildUptoPayload } from "../src/modules/facilitator/upto/client.js";
 import { UptoStellarScheme } from "../src/modules/facilitator/upto/scheme.js";
@@ -30,7 +31,7 @@ const facilitatorSecret = req("FACILITATOR_SECRET", process.env.FACILITATOR_STEL
 const merchant = req("MERCHANT_ADDRESS");
 const contractId = req("UPTO_CONTRACT_ID", process.env.CONTRACT_ID);
 
-const passphrase = network.endsWith(":testnet") ? Networks.TESTNET : Networks.PUBLIC;
+const passphrase = getNetworkPassphrase(network);
 const asset = new Asset(
   process.env.ASSET_CODE ?? "USDC",
   process.env.ASSET_ISSUER ?? "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
