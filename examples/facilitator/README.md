@@ -9,13 +9,15 @@ The service is one process composed of two modules under `src/modules/`:
 
 ## Endpoints
 
-| Method | Path                    | Description                                    |
-| ------ | ----------------------- | ---------------------------------------------- |
-| POST   | `/verify`               | Validate a payment payload                     |
-| POST   | `/settle`               | Submit the transaction to the network          |
-| GET    | `/supported`            | List supported scheme/network pairs            |
-| GET    | `/discovery/resources`  | List cataloged resources (needs `DATABASE_URL`) |
-| GET    | `/health`               | Health check                                   |
+| Method | Path                   | Description                                     |
+| ------ | ---------------------- | ----------------------------------------------- |
+| POST   | `/verify`              | Validate a payment payload                      |
+| POST   | `/settle`              | Submit the transaction to the network           |
+| GET    | `/supported`           | List supported scheme/network pairs             |
+| GET    | `/discovery/resources` | List cataloged resources (needs `DATABASE_URL`) |
+| GET    | `/health`              | Health check                                    |
+
+`/discovery/resources` is deliberately public so Bazaar clients can browse it without an API key; it is still rate-limited.
 
 ## Quick Start
 
