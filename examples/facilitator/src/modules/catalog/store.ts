@@ -1,5 +1,7 @@
 import pg from "pg";
 
+import { logger } from "../../utils/logger.js";
+
 /** Shape follows @x402/extensions/bazaar DiscoveryResource. */
 export interface CatalogResource {
   resource: string;
@@ -31,7 +33,12 @@ export class CatalogStore {
   constructor(private readonly pool: pg.Pool) {}
 
   static connect(databaseUrl: string): CatalogStore {
-    return new CatalogStore(new pg.Pool({ connectionString: databaseUrl }));
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    // An unhandled pool 'error' event (e.g. an idle client dropped by a
+    // Postgres restart) is fatal to the process. The pool discards the dead
+    // client before emitting, so logging is the only action left to take.
+    pool.on("error", (err) => logger.error({ err }, "Catalog pool error"));
+    return new CatalogStore(pool);
   }
 
   async ensureSchema(): Promise<void> {
