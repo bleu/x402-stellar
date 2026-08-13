@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import request from "supertest";
 import type express from "express";
+import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 
 // Captures the after-settle hook that createFacilitatorModule registers, so
 // the facilitator -> catalog wiring can be exercised without a real scheme.
@@ -64,6 +65,7 @@ const TEST_API_KEY = "test-secret-key-12345";
 function stubStore() {
   return {
     upsert: vi.fn().mockResolvedValue(undefined),
+    upsertWithSettlement: vi.fn().mockResolvedValue(undefined),
     list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     close: vi.fn().mockResolvedValue(undefined),
   };
@@ -96,20 +98,33 @@ describe("catalog wiring through createApp", () => {
 
   it("records a successful settlement in the catalog via the after-settle hook", async () => {
     expect(mockState.afterSettle).toBeDefined();
+    const { bazaar } = declareDiscoveryExtension({
+      input: { city: "San Francisco" },
+      inputSchema: { properties: { city: { type: "string" } } },
+    });
     await mockState.afterSettle!({
       paymentPayload: {
         x402Version: 2,
         resource: { url: "https://api.example.com/weather" },
         accepted: {},
+        // Only bazaar-declaring resources are cataloged, so the wiring can
+        // only be observed through a payload that carries the extension.
+        extensions: {
+          bazaar: {
+            ...bazaar,
+            info: { ...bazaar.info, input: { ...bazaar.info.input, method: "GET" } },
+          },
+        },
         payload: {},
       },
       requirements: { scheme: "exact", network: "stellar:testnet" },
       result: { success: true, transaction: "abc", network: "stellar:testnet" },
     });
 
-    expect(store.upsert).toHaveBeenCalledTimes(1);
-    expect(store.upsert).toHaveBeenCalledWith(
+    expect(store.upsertWithSettlement).toHaveBeenCalledTimes(1);
+    expect(store.upsertWithSettlement).toHaveBeenCalledWith(
       expect.objectContaining({ resource: "https://api.example.com/weather" }),
+      expect.anything(),
     );
   });
 });
