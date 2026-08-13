@@ -5,7 +5,8 @@ Express service that verifies and settles [x402](https://www.x402.org/) payments
 The service is one process composed of two modules under `src/modules/`:
 
 - **facilitator** — the x402 protocol endpoints (`/verify`, `/settle`, `/supported`), a thin shell over `@x402/stellar`'s `ExactStellarScheme`, which owns all payload validation and settlement machinery.
-- **catalog** — optional resource discovery backed by Postgres. When `DATABASE_URL` is set, resources seen in successful settlements are recorded (via the facilitator's after-settle hook) and served at `GET /discovery/resources` in the [x402 Bazaar](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md) list shape. Without `DATABASE_URL` the module is disabled and the facilitator runs fully stateless.
+- **catalog** — optional resource discovery backed by Postgres with pgvector. When `DATABASE_URL` is set, resources seen in successful settlements are recorded (via the facilitator's after-settle hook) and served at `GET /discovery/resources` and `GET /discovery/search` in the [x402 Bazaar](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md) shapes. Without `DATABASE_URL` the module is disabled and the facilitator runs fully stateless.
+- **prices** — optional USD rates for the `maxUsdPrice` search filter, polled from CoinGecko.
 
 ## Endpoints
 
@@ -15,9 +16,56 @@ The service is one process composed of two modules under `src/modules/`:
 | POST   | `/settle`              | Submit the transaction to the network           |
 | GET    | `/supported`           | List supported scheme/network pairs             |
 | GET    | `/discovery/resources` | List cataloged resources (needs `DATABASE_URL`) |
+| GET    | `/discovery/search`    | Hybrid natural-language search over the catalog |
 | GET    | `/health`              | Health check                                    |
 
-`/discovery/resources` is deliberately public so Bazaar clients can browse it without an API key; it is still rate-limited.
+Both `/discovery` endpoints are deliberately public so Bazaar clients can browse without an API key; they are still rate-limited.
+
+## Cataloging
+
+A resource is cataloged only when the payer's `PaymentPayload` carries a `bazaar` discovery extension. Everything else settles normally and is not recorded — there is no separate registration step, and nothing requires the seller to act after payment.
+
+Validation is `@x402/extensions/bazaar`'s own `extractDiscoveryInfo`, so route-template checks (percent-decoding, `..` and `://`), the service-metadata soft-drop rules (32-character `serviceName`, at most 5 tags, http(s) non-loopback `iconUrl`), JSON-Schema validation of `info`, and MCP tool-name extraction all behave exactly as the spec's reference implementation does.
+
+Two consequences worth knowing:
+
+A resource is keyed by `origin + (routeTemplate ?? pathname)`, so query strings never create duplicate rows and `/weather/testnet` is stored once as `/weather/:network`. Row identity is `(resource, toolName)`, which lets several MCP tools share one endpoint without overwriting each other.
+
+`accepts` reflects the payment options actually observed in settlements, not the full set a server declares. The facilitator only ever sees the one option a client chose (`PaymentPayload.accepted`); `PaymentRequired.accepts` never reaches it. So an option a server has stopped offering lingers until it ages out of relevance, and the `asset`, `maxAmount` and `maxUsdPrice` filters judge observed prices rather than declared ones.
+
+Each settlement also appends a row to `catalog_settlements` holding the resource, asset, and **payer address**. Payer addresses are public chain data and are the only way to count distinct payers; they drive the `quality` block on search results (`l30DaysTotalCalls`, `l30DaysUniquePayers`, `lastCalledAt`).
+
+## Search
+
+`GET /discovery/search?query=...` ranks the catalog by reciprocal rank fusion over two arms: Postgres full-text search over a stored text document, and cosine distance over local [all-MiniLM-L6-v2](https://huggingface.co/Xenova/all-MiniLM-L6-v2) embeddings in pgvector. Each arm applies every filter and takes its own top 50; the two are fused with `1/(60 + rank)`. No API key and no outbound calls: the model runs in-process via `@huggingface/transformers`.
+
+| Parameter        | Applies to | Description                                                     |
+| ---------------- | ---------- | --------------------------------------------------------------- |
+| `query`          | search     | Natural-language query (required)                               |
+| `type`           | both       | Protocol type, `http` or `mcp`                                  |
+| `payTo`          | both       | Payment recipient address                                       |
+| `scheme`         | both       | Payment scheme                                                  |
+| `network`        | both       | CAIP-2 network identifier                                       |
+| `extensions`     | both       | Extension key that must be present, e.g. `bazaar`               |
+| `asset`          | both       | Comma-separated asset list, matched as any-of                   |
+| `maxAmount`      | both       | Atomic units; needs exactly one `asset` or the request is a 400 |
+| `maxUsdPrice`    | both       | USD ceiling across assets with a known rate                     |
+| `tags`           | both       | Comma-separated tag list, matched as any-of                     |
+| `urlSubstring`   | both       | Case-insensitive substring of the resource url                  |
+| `limit`          | search     | Defaults to 10, capped at 20                                    |
+| `limit`/`offset` | resources  | Defaults to 100, capped at 1000                                 |
+
+Search answers `{x402Version, resources, searchMethod, partialResults?, warnings?}`. Note the array is `resources` here and `items` on the list route — that difference is in the SDK's types, not an inconsistency here. `partialResults` appears when matches were truncated.
+
+A price ceiling never silently hides anything. Resources priced only in assets with no USD rate are kept, and `warnings` says how many escaped the check; if no rate is available at all, `warnings` says the filter was not applied rather than blaming the assets.
+
+Natural language stays in `query`. A price constraint arrives as `maxUsdPrice`, which is what the reference Bazaar does — translating "under a cent" into `maxUsdPrice=0.01` is the calling agent's job.
+
+### Demo corpus
+
+`pnpm seed-catalog` loads twenty synthetic services alongside whatever real settlements have recorded. They are built as real `PaymentPayload` objects and pushed through the same extraction and upsert path a settlement uses, so a seeded row cannot have a shape real traffic could not produce. Seeded rows carry `source = 'seed'`, which is stored but never served.
+
+The corpus is designed to exercise each branch rather than to look realistic: several rival weather services (one pricier than a cent, one with a thin description, one with no `serviceName`), a spread of assets including one with no USD mapping, a templated route, an MCP tool, and entries that trip the soft-drop rules.
 
 ## Quick Start
 
@@ -31,29 +79,41 @@ The facilitator listens on port 4022 by default.
 
 ## Configuration
 
-| Variable                              | Default                          | Description                                  |
-| ------------------------------------- | -------------------------------- | -------------------------------------------- |
-| `FACILITATOR_STELLAR_PRIVATE_KEY`     | _required_                       | Stellar secret key for single-signer mode    |
-| `PORT`                                | `4022`                           | Listen port                                  |
-| `STELLAR_NETWORK`                     | `stellar:testnet`                | CAIP-2 network identifier                    |
-| `STELLAR_RPC_URL`                     | testnet RPC                      | Custom Soroban RPC URL (required for pubnet) |
-| `LOG_LEVEL`                           | `info`                           | Pino log level                               |
-| `CORS_ORIGINS`                        | `*`                              | Comma-separated allowed origins              |
-| `TRUST_PROXY`                         | `loopback,linklocal,uniquelocal` | Trusted proxy ranges                         |
-| `MAX_TRANSACTION_FEE_STROOPS`         | `50000` (library default)        | Max fee in stroops accepted from clients     |
-| `FACILITATOR_STELLAR_FEE_BUMP_SECRET` | --                               | Fee-bump signer secret (high-throughput)     |
-| `FACILITATOR_STELLAR_CHANNEL_SECRETS` | --                               | Channel account secrets, comma-separated     |
-| `DATABASE_URL`                        | --                               | Postgres URL; enables the catalog module     |
+| Variable                              | Default                          | Description                                   |
+| ------------------------------------- | -------------------------------- | --------------------------------------------- |
+| `FACILITATOR_STELLAR_PRIVATE_KEY`     | _required_                       | Stellar secret key for single-signer mode     |
+| `PORT`                                | `4022`                           | Listen port                                   |
+| `STELLAR_NETWORK`                     | `stellar:testnet`                | CAIP-2 network identifier                     |
+| `STELLAR_RPC_URL`                     | testnet RPC                      | Custom Soroban RPC URL (required for pubnet)  |
+| `LOG_LEVEL`                           | `info`                           | Pino log level                                |
+| `CORS_ORIGINS`                        | `*`                              | Comma-separated allowed origins               |
+| `TRUST_PROXY`                         | `loopback,linklocal,uniquelocal` | Trusted proxy ranges                          |
+| `MAX_TRANSACTION_FEE_STROOPS`         | `50000` (library default)        | Max fee in stroops accepted from clients      |
+| `FACILITATOR_STELLAR_FEE_BUMP_SECRET` | --                               | Fee-bump signer secret (high-throughput)      |
+| `FACILITATOR_STELLAR_CHANNEL_SECRETS` | --                               | Channel account secrets, comma-separated      |
+| `DATABASE_URL`                        | --                               | Postgres URL; enables the catalog module      |
+| `COINGECKO_API_KEY`                   | --                               | Demo key; enables USD rates for `maxUsdPrice` |
 
-A local Postgres for the catalog module ships in `docker-compose.yml`:
+A local pgvector-enabled Postgres for the catalog module ships in `docker-compose.yml`:
 
 ```bash
 docker compose up -d postgres
 # then in .env:
 # DATABASE_URL=postgres://facilitator:facilitator@localhost:5442/facilitator
+pnpm seed-catalog   # optional: load the twenty synthetic demo services
 ```
 
-The schema is created automatically at startup.
+The schema is created automatically at startup. `DATABASE_URL` must point at a Postgres with pgvector available (the image is `pgvector/pgvector:pg17`); the facilitator creates the extension itself and fails at startup if it cannot, rather than degrading to a search that silently returns nothing.
+
+The schema is create-if-absent with no migration handling, which is fine pre-production but means **adding a column requires recreating the volume**:
+
+```bash
+docker compose down -v && docker compose up -d postgres
+```
+
+The MiniLM weights are loaded at startup, so a missing model fails at boot rather than on the first query. The Docker image bakes them in, so the running container needs no HuggingFace egress.
+
+Without `COINGECKO_API_KEY` the price feed stays off and `maxUsdPrice` reports that it could not be applied. With a key, prices are polled every 15 minutes in one batched call — roughly 2,880 calls a month against the demo tier's 10,000 — and a price older than an hour stops being trusted. CoinGecko indexes Stellar mainnet contracts but not testnet ones, so testnet assets rely on a hand-maintained map in `src/modules/prices/index.ts`. `PaymentRequirements` carries no decimals field, so USD conversion assumes the `@x402/stellar` default of 7 decimals for mapped assets.
 
 ## Operating Modes
 
@@ -115,6 +175,7 @@ When the channel account variables are absent or empty, the facilitator falls ba
 
 | Script                             | Description                                                                           |
 | ---------------------------------- | ------------------------------------------------------------------------------------- |
+| `pnpm seed-catalog`                | Load the twenty synthetic demo services into the catalog (needs `DATABASE_URL`)       |
 | `pnpm generate-channel-accounts`   | Create 1 fee-payer + 19 channel accounts on testnet (saves keys to `scripts/output/`) |
 | `pnpm refund-accounts-from-env`    | Re-fund facilitator accounts from `.env` secrets after a testnet reset                |
 | `pnpm refund-accounts-from-remote` | Fund signer addresses fetched from a remote facilitator's `/supported` endpoint       |
@@ -131,3 +192,16 @@ pnpm test         # Run tests
 pnpm typecheck    # Type-check without emitting
 pnpm lint         # Lint src/
 ```
+
+### Catalog tests
+
+The catalog's ranking is almost entirely SQL — generated tsvector columns, HNSW ranking, rank fusion — which no stub can stand in for. Those tests run against a real pgvector Postgres and are skipped unless `CATALOG_TEST_DATABASE_URL` is set, so `pnpm test` stays fast and needs neither a database nor the model:
+
+```bash
+docker compose up -d postgres
+CATALOG_TEST_DATABASE_URL=postgres://facilitator:facilitator@localhost:5442/facilitator pnpm test
+```
+
+That also switches on the MiniLM embedder tests and a golden-query evaluation over the demo corpus. The golden answers are ours, so the evaluation measures regression rather than absolute quality: it catches a change that made ranking worse than it was and says nothing about how the ranking compares to any other system.
+
+These tests own the schema of the database they point at (they drop and recreate the catalog tables), so point them at a scratch database rather than one holding anything you want to keep. They currently run locally only; wiring them into CI is deliberately left for a follow-up.
