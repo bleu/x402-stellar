@@ -7,10 +7,13 @@
 #   client       – static SPA served by nginx (port 80)
 #
 # Optimizations:
-#   - Alpine base images (node:22-alpine) — ~86MB smaller per stage
 #   - No `pnpm deploy` — runs from workspace tree (fast builds)
 #   - Aggressive pruning of EVM/SVM/non-Stellar deps + client/build bloat
 #   - Build tools (turbo, typescript, eslint, etc.) excluded from runtime
+#
+# The node stages run on node:22-slim rather than Alpine, which costs ~86MB per
+# stage: onnxruntime-node ships glibc-only prebuilds and fails on musl even with
+# gcompat, and the facilitator needs it for MiniLM embeddings.
 #
 # Build context MUST be the repository root.
 #
@@ -202,7 +205,11 @@ WORKDIR /app/examples/facilitator
 # Bake the MiniLM weights into the image so the running container needs no
 # HuggingFace egress, and a missing model is a build failure rather than a
 # first-query failure. ~25MB quantised.
-ENV HF_HOME=/app/.cache/huggingface
+#
+# The weights land in @huggingface/transformers' own cache directory inside
+# node_modules, which this stage already carries, so the runtime finds them at
+# the same path the prefetch wrote. The library ignores HF_HOME, so pointing a
+# cache env var somewhere else would not move them.
 RUN node -e "import('@huggingface/transformers').then(({pipeline}) => \
       pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {dtype: 'q8'}) \
     ).then(() => console.log('MiniLM cached')).catch((e) => { console.error(e); process.exit(1); })"
