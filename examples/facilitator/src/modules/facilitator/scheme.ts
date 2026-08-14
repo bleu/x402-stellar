@@ -3,6 +3,7 @@ import { ExactStellarScheme } from "@x402/stellar/exact/facilitator";
 
 import { Env } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
+import { UptoStellarScheme } from "./upto/scheme.js";
 
 /**
  * Builds the exact-scheme handler from env config. Two modes:
@@ -41,5 +42,23 @@ export function createExactStellarScheme(): ExactStellarScheme {
   return new ExactStellarScheme([stellarSigner], {
     rpcConfig,
     maxTransactionFeeStroops,
+  });
+}
+
+/**
+ * Builds the upto-scheme handler when UPTO_CONTRACT_ID is set, otherwise
+ * returns undefined so the facilitator serves exact only.
+ */
+export function createUptoStellarScheme(): UptoStellarScheme | undefined {
+  const contractId = Env.uptoContractId;
+  if (!contractId) return undefined;
+
+  logger.info({ contract: contractId }, "upto scheme enabled");
+  return new UptoStellarScheme({
+    contractId,
+    facilitatorSecret: Env.stellarPrivateKey,
+    rpcUrl: Env.stellarRpcUrl,
+    network: Env.stellarNetwork,
+    maxTransactionFeeStroops: Env.maxTransactionFeeStroops,
   });
 }

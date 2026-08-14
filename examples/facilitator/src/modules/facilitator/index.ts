@@ -12,7 +12,7 @@ import { Env } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
 import { validatePaymentPayload, validatePaymentRequirements } from "../../utils/validation.js";
 import type { CatalogModule } from "../catalog/index.js";
-import { createExactStellarScheme } from "./scheme.js";
+import { createExactStellarScheme, createUptoStellarScheme } from "./scheme.js";
 
 export interface FacilitatorModule {
   router: Router;
@@ -55,6 +55,11 @@ export function createFacilitatorModule(catalog?: CatalogModule): FacilitatorMod
     });
 
   facilitator.register(Env.stellarNetwork, scheme);
+
+  const uptoScheme = createUptoStellarScheme();
+  if (uptoScheme) {
+    facilitator.register(Env.stellarNetwork, uptoScheme);
+  }
 
   // Tells callers at /supported that this facilitator understands the discovery
   // extension, which is how a resource server learns its payloads get catalogued.
