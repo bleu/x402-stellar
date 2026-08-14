@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    # pgvector, not plain postgres: the catalog stores MiniLM embeddings.
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: facilitator
       POSTGRES_PASSWORD: facilitator
