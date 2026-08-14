@@ -192,18 +192,21 @@ export function buildUptoApiRouteConfig(netConfig: NetworkConfig): RouteConfig {
     description: "Current weather for any city, charged by city tier up to a ceiling",
     serviceName: "Stellar Weather Upto",
     tags: ["weather", "forecast", "upto", "ceiling"],
+    // The declared example is a standard city on purpose. An agent calls the
+    // example first, so this is what makes the partial settle the thing anyone
+    // sees by default; a premium city would always take the whole ceiling.
     extensions: declareDiscoveryExtension({
-      input: { city: "Tokyo" },
+      input: { city: "Curitiba" },
       inputSchema: {
         properties: { city: { type: "string", description: "City name to look up" } },
         required: ["city"],
       },
       output: {
         example: {
-          city: "Tokyo",
-          country: "Japan",
+          city: "Curitiba",
+          country: "Brazil",
           current: { weather: "clear sky", temperature_f: 71.2, humidity_pct: 54 },
-          charged: { amountAtomic: "30000", scheme: "upto" },
+          charged: { amountAtomic: "10000", scheme: "upto" },
         },
       },
     }),

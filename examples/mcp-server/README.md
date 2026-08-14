@@ -171,6 +171,8 @@ When the failure came from the facilitator or the resource server, its own `inva
 
 With `upto` what gets signed is a ceiling, so the ceiling is what gets charged: it is all the signature bounds, and the seller has not chosen yet. When the answer comes back saying it succeeded and naming the amount, the charge comes down to that amount and the difference returns to the session budget. A failure, a timeout, or a settlement that names no amount all keep the ceiling charged. Without the release, a one-cent ceiling that charges a tenth of a cent would drain a session budget many times over.
 
+One case is worse than it looks. When the endpoint answers 4xx it cancels the payment, so nothing settles on-chain — but the response carries no settlement to reconcile against, so the wallet keeps the whole ceiling charged for a call that cost nothing. Asking a weather endpoint for a city that does not exist therefore spends budget without spending money. `@x402/core` gives the resource server a cancellation hook but the client no signal it can trust, and guessing from "4xx and no settlement header" would hand free allowance to anything that strips headers. Keeping the charge is the same conservative choice as a timeout.
+
 **The budget resets when the process restarts.** It lives in memory, keyed to nothing. Restart the server and the session starts again with a full allowance.
 
 ## Ranking does not use usage

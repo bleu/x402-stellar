@@ -49,10 +49,13 @@ function scheme(): UptoStellarScheme {
   });
 }
 
-function payload(p: UptoStellarPayload): PaymentPayload {
+function payload(
+  p: UptoStellarPayload,
+  accepted: PaymentRequirements = requirements(),
+): PaymentPayload {
   return {
     x402Version: 2,
-    accepted: requirements(),
+    accepted,
     payload: p as unknown as Record<string, unknown>,
   };
 }
@@ -131,5 +134,17 @@ describe("UptoStellarScheme.settle pre-network checks", () => {
   it("rejects a settle amount that never resolved to atomic units", async () => {
     const res = await scheme().settle(payload(validPayload()), requirements({ amount: "$0.003" }));
     expect(res).toMatchObject({ success: false, errorReason: "amount_exceeds_max" });
+  });
+
+  it("rejects a quoted ceiling that is not the one the buyer signed", async () => {
+    // The settle call sees a reduced requirements.amount, so the only surviving
+    // record of what was quoted is payload.accepted. Anything downstream that
+    // reads it as the price -- the catalog does -- needs it pinned to the
+    // signature rather than taken on the client's word.
+    const res = await scheme().settle(
+      payload(validPayload(), requirements({ amount: "9999999" })),
+      requirements({ amount: "10000" }),
+    );
+    expect(res).toMatchObject({ success: false, errorReason: "cap_mismatch" });
   });
 });

@@ -45,6 +45,18 @@ describe("weather-upto route config", () => {
     expect(bazaar.info.input.queryParams).toHaveProperty("city");
   });
 
+  it("declares an example city that settles under the ceiling", () => {
+    // An agent calls the declared example first. A premium city there would
+    // always take the whole ceiling, and the partial settle -- the only reason
+    // this route exists -- would never be visible.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const config = buildUptoApiRouteConfig(netConfig as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const example = (config.extensions as any).bazaar.info.input.queryParams.city as string;
+
+    expect(uptoSettlementAmount(example)).toBe(UPTO_STANDARD_ATOMIC);
+  });
+
   it("never charges more than the ceiling it quoted", () => {
     const cap = toAtomic(WEATHER_UPTO_CAP);
 

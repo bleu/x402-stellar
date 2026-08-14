@@ -239,6 +239,13 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     if (auth.payTo !== requirements.payTo) {
       return invalid("recipient_mismatch", "authorization payTo does not match requirements");
     }
+    // By settle time `requirements.amount` has been rewritten to the charge, so
+    // `payload.accepted` is the only surviving record of the quoted ceiling.
+    // Anything reading it as the price -- the catalog does -- needs it backed by
+    // the signature rather than taken on the client's word.
+    if (payload.accepted.amount !== auth.maxAmount) {
+      return invalid("cap_mismatch", "accepted amount does not match the signed maxAmount");
+    }
     return undefined;
   }
 
