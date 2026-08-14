@@ -23,6 +23,7 @@ vi.mock("@x402/core/facilitator", () => ({
       },
       onSettleFailure: () => instance,
       register: vi.fn(),
+      registerExtension: () => instance,
       verify: vi.fn().mockResolvedValue({ isValid: true }),
       settle: vi.fn(),
       getSupported: vi.fn().mockReturnValue({ kinds: [] }),
