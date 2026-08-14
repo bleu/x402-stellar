@@ -17,6 +17,20 @@ export const COINGECKO_IDS_BY_ASSET = new Map<string, string>([
 ]);
 
 /**
+ * Assets taken to be worth a dollar without asking anyone.
+ *
+ * Both mapped USDC contracts hold a USD peg by definition, and the testnet one
+ * is not indexed by CoinGecko at all, so a live quote would never arrive for the
+ * asset the demo actually charges in. Assuming the peg is what lets maxUsdPrice
+ * filter with no API key and no network. Non-stable assets like XLM still need a
+ * real rate and stay unpriced until one arrives.
+ */
+export const ASSUMED_USD_PRICES = new Map<string, number>([
+  ["CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75", 1],
+  ["CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA", 1],
+]);
+
+/**
  * Atomic units per whole token. `PaymentRequirements` carries no decimals
  * field and @x402/stellar defaults to 7, so every USD conversion rests on a
  * documented "7-decimal token" assumption for mapped assets.
@@ -85,10 +99,29 @@ export function createPriceFeed({ store, apiKey }: PriceFeedOptions): PriceFeed 
     },
 
     async refresh() {
-      if (!apiKey) return;
-
-      const ids = [...new Set(COINGECKO_IDS_BY_ASSET.values())];
       try {
+        // Written every tick, not just at startup, so the assumed rates stay
+        // inside PRICE_MAX_AGE_MS and keep filtering on a keyless deployment.
+        const assumedAt = new Date();
+        const assumed: AssetPrice[] = [...ASSUMED_USD_PRICES].map(([asset, usd]) => ({
+          asset,
+          coingeckoId: COINGECKO_IDS_BY_ASSET.get(asset) ?? "assumed-usd-peg",
+          usdPrice: String(usd),
+          fetchedAt: assumedAt,
+        }));
+        for (const price of assumed) remember(price.asset, Number(price.usdPrice), assumedAt);
+        await store.savePrices(assumed);
+
+        if (!apiKey) return;
+
+        // Only the assets whose price is not assumed, so a quote cannot move a
+        // pegged stablecoin and make demo prices wander.
+        const quoted = [...COINGECKO_IDS_BY_ASSET].filter(
+          ([asset]) => !ASSUMED_USD_PRICES.has(asset),
+        );
+        const ids = [...new Set(quoted.map(([, coingeckoId]) => coingeckoId))];
+        if (ids.length === 0) return;
+
         // One batched call per tick rather than one per asset.
         const url = `${COINGECKO_URL}?ids=${ids.join(",")}&vs_currencies=usd`;
         const response = await fetch(url, { headers: { "x-cg-demo-api-key": apiKey } });
@@ -98,7 +131,7 @@ export function createPriceFeed({ store, apiKey }: PriceFeedOptions): PriceFeed 
         const fetchedAt = new Date();
         const fetched: AssetPrice[] = [];
 
-        for (const [asset, coingeckoId] of COINGECKO_IDS_BY_ASSET) {
+        for (const [asset, coingeckoId] of quoted) {
           const usd = body[coingeckoId]?.usd;
           if (typeof usd !== "number") continue;
           remember(asset, usd, fetchedAt);
@@ -114,9 +147,10 @@ export function createPriceFeed({ store, apiKey }: PriceFeedOptions): PriceFeed 
     },
 
     start() {
+      // Armed with or without a key: even keyless, each tick restamps the
+      // assumed stablecoin rates so they never age out of use.
       if (!apiKey) {
-        logger.info("Price feed disabled (no COINGECKO_API_KEY); maxUsdPrice will not filter");
-        return;
+        logger.info("No COINGECKO_API_KEY; maxUsdPrice judges assumed stablecoin rates only");
       }
       timer = setInterval(() => void this.refresh(), PRICE_POLL_INTERVAL_MS);
       timer.unref();

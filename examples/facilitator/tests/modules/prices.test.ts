@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import {
+  ASSUMED_USD_PRICES,
   COINGECKO_IDS_BY_ASSET,
   PRICE_MAX_AGE_MS,
   PRICE_POLL_INTERVAL_MS,
@@ -43,6 +44,12 @@ function stubPriceStore(): PriceStore & {
 
 const MAPPED_ASSET = [...COINGECKO_IDS_BY_ASSET.keys()][0];
 
+/** An asset CoinGecko has to quote, i.e. one with no assumed peg. */
+const QUOTED_ASSET = [...COINGECKO_IDS_BY_ASSET.keys()].find(
+  (asset) => !ASSUMED_USD_PRICES.has(asset),
+)!;
+const QUOTED_ID = COINGECKO_IDS_BY_ASSET.get(QUOTED_ASSET)!;
+
 describe("price feed", () => {
   let store: ReturnType<typeof stubPriceStore>;
 
@@ -72,21 +79,69 @@ describe("price feed", () => {
     expect(feed.usdPriceOf("CUNKNOWNASSET")).toBeNull();
   });
 
-  it("converts an atomic amount into usd for a mapped asset", async () => {
+  it("converts an atomic amount into usd for a quoted asset", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ [COINGECKO_IDS_BY_ASSET.get(MAPPED_ASSET)!]: { usd: 2 } }),
+        json: async () => ({ [QUOTED_ID]: { usd: 2 } }),
       }),
     );
 
     const feed = createPriceFeed({ store, apiKey: "key" });
     await feed.refresh();
 
-    expect(feed.usdPriceOf(MAPPED_ASSET)).toBe(2);
+    expect(feed.usdPriceOf(QUOTED_ASSET)).toBe(2);
     // 7 decimals, the @x402/stellar default for a USD stablecoin.
-    expect(feed.atomicToUsd(MAPPED_ASSET, "10000000")).toBe(2);
+    expect(feed.atomicToUsd(QUOTED_ASSET, "10000000")).toBe(2);
+  });
+
+  it("prices the pegged stablecoins with no key and no network", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const feed = createPriceFeed({ store });
+    await feed.refresh();
+
+    for (const [asset, usd] of ASSUMED_USD_PRICES) {
+      expect(feed.usdPriceOf(asset)).toBe(usd);
+    }
+    expect(feed.hasAnyPrice()).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("leaves a quoted asset unpriced without a key", async () => {
+    const feed = createPriceFeed({ store });
+    await feed.refresh();
+
+    expect(feed.usdPriceOf(QUOTED_ASSET)).toBeNull();
+  });
+
+  it("persists the assumed rates so the sql price filter can read them", async () => {
+    const feed = createPriceFeed({ store });
+    await feed.refresh();
+
+    for (const asset of ASSUMED_USD_PRICES.keys()) {
+      expect(store.rows.get(asset)?.usdPrice).toBe("1");
+    }
+  });
+
+  it("does not let a quote move a pegged stablecoin", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        // A depegged quote must not reach an asset whose peg is assumed.
+        json: async () => ({ "usd-coin": { usd: 0.42 }, [QUOTED_ID]: { usd: 2 } }),
+      }),
+    );
+
+    const feed = createPriceFeed({ store, apiKey: "key" });
+    await feed.refresh();
+
+    for (const [asset, usd] of ASSUMED_USD_PRICES) {
+      expect(feed.usdPriceOf(asset)).toBe(usd);
+    }
   });
 
   it("stops trusting a price once it is an hour stale", async () => {
@@ -129,7 +184,6 @@ describe("price feed", () => {
     await feed.refresh();
 
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(feed.usdPriceOf(MAPPED_ASSET)).toBeNull();
   });
 
   it("keeps the last good price when a refresh fails", async () => {
@@ -139,7 +193,7 @@ describe("price feed", () => {
         .fn()
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ [COINGECKO_IDS_BY_ASSET.get(MAPPED_ASSET)!]: { usd: 2 } }),
+          json: async () => ({ [QUOTED_ID]: { usd: 2 } }),
         })
         .mockRejectedValueOnce(new Error("coingecko down")),
     );
@@ -148,10 +202,10 @@ describe("price feed", () => {
     await feed.refresh();
     await feed.refresh();
 
-    expect(feed.usdPriceOf(MAPPED_ASSET)).toBe(2);
+    expect(feed.usdPriceOf(QUOTED_ASSET)).toBe(2);
   });
 
-  it("asks CoinGecko for every mapped asset in one call", async () => {
+  it("asks CoinGecko for the quoted assets in one call", async () => {
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -160,7 +214,8 @@ describe("price feed", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const url = String(fetchSpy.mock.calls[0][0]);
-    for (const id of new Set(COINGECKO_IDS_BY_ASSET.values())) {
+    for (const [asset, id] of COINGECKO_IDS_BY_ASSET) {
+      if (ASSUMED_USD_PRICES.has(asset)) continue;
       expect(url).toContain(id);
     }
   });

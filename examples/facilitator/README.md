@@ -113,7 +113,9 @@ docker compose down -v && docker compose up -d postgres
 
 The MiniLM weights are loaded at startup, so a missing model fails at boot rather than on the first query. The Docker image bakes them in, so the running container needs no HuggingFace egress.
 
-Without `COINGECKO_API_KEY` the price feed stays off and `maxUsdPrice` reports that it could not be applied. With a key, prices are polled every 15 minutes in one batched call — roughly 2,880 calls a month against the demo tier's 10,000 — and a price older than an hour stops being trusted. CoinGecko indexes Stellar mainnet contracts but not testnet ones, so testnet assets rely on a hand-maintained map in `src/modules/prices/index.ts`. `PaymentRequirements` carries no decimals field, so USD conversion assumes the `@x402/stellar` default of 7 decimals for mapped assets.
+The mapped USDC contracts are assumed to be worth a dollar, so `maxUsdPrice` filters with no API key and no network at all. That assumption is what makes the filter usable on testnet: CoinGecko indexes Stellar mainnet contracts but not testnet ones, so the asset the demo charges in could never be quoted. A live quote is never applied to a pegged asset, which keeps demo prices from wandering. Assets with no assumed peg, such as XLM, need `COINGECKO_API_KEY`, and until a rate arrives a resource priced only in them is kept and counted in `warnings` rather than judged.
+
+With a key, prices are polled every 15 minutes in one batched call — roughly 2,880 calls a month against the demo tier's 10,000 — and a price older than an hour stops being trusted. The poll runs without a key too, rewriting the assumed rates so they never age out. The asset-to-CoinGecko map is maintained by hand in `src/modules/prices/index.ts`. `PaymentRequirements` carries no decimals field, so USD conversion assumes the `@x402/stellar` default of 7 decimals for mapped assets.
 
 ## Operating Modes
 
