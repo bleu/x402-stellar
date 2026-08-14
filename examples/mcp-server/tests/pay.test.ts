@@ -91,7 +91,7 @@ function harness(responses: Response[], limits = { perCall: "0.01", session: "0.
     network: NETWORK as `${string}:${string}`,
     ability,
     budget,
-    createSchemeClient: fakeScheme,
+    createSchemeClients: () => [fakeScheme()],
     fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,
     explorerBaseUrl: "https://stellar.expert/explorer/testnet/tx",
   });
@@ -281,7 +281,7 @@ describe("paid_request", () => {
       network: NETWORK as `${string}:${string}`,
       ability,
       budget,
-      createSchemeClient: fakeScheme,
+      createSchemeClients: () => [fakeScheme()],
       fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,
     });
 
@@ -303,7 +303,7 @@ describe("paid_request", () => {
       network: NETWORK as `${string}:${string}`,
       ability,
       budget,
-      createSchemeClient: fakeScheme,
+      createSchemeClients: () => [fakeScheme()],
       fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,
     });
 

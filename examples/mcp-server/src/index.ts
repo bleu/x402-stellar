@@ -2,6 +2,7 @@ import "dotenv/config";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createEd25519Signer } from "@x402/stellar";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
+import { UptoStellarClientScheme } from "@x402-stellar/upto/client";
 
 import { Env } from "./config/env.js";
 import { SessionBudget } from "./budget.js";
@@ -25,9 +26,16 @@ async function main(): Promise<void> {
     network,
     ability,
     budget,
-    // A fresh scheme client per call, so the per-call hooks that enforce the
+    // Fresh scheme clients per call, so the per-call hooks that enforce the
     // budget cannot be crossed by two tool calls running at once.
-    createSchemeClient: () => new ExactStellarScheme(signer),
+    createSchemeClients: () => [
+      new ExactStellarScheme(signer),
+      new UptoStellarClientScheme({
+        buyerSecret: Env.stellarPrivateKey,
+        rpcUrl: Env.stellarRpcUrl,
+        network,
+      }),
+    ],
     fetchImpl: globalThis.fetch,
     explorerBaseUrl: Env.explorerBaseUrl,
   });

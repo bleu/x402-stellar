@@ -169,6 +169,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)
+      '@x402-stellar/upto':
+        specifier: workspace:*
+        version: link:../../packages/upto
       '@x402/core':
         specifier: ^2.21.0
         version: 2.21.0

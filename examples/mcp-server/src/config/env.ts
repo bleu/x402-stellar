@@ -19,6 +19,11 @@ export class Env {
     return (process.env.STELLAR_NETWORK ?? "stellar:testnet") as `${string}:${string}`;
   }
 
+  /** Soroban RPC, used to simulate the settle an `upto` ceiling authorizes. */
+  static get stellarRpcUrl(): string {
+    return process.env.STELLAR_RPC_URL ?? "https://soroban-testnet.stellar.org";
+  }
+
   /** The Bazaar this server searches. The only endpoint it is told about. */
   static get facilitatorUrl(): string {
     return (process.env.FACILITATOR_URL ?? "http://localhost:4022").replace(/\/+$/, "");

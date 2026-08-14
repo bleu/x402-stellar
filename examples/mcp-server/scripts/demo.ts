@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createEd25519Signer } from "@x402/stellar";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
+import { UptoStellarClientScheme } from "@x402-stellar/upto/client";
 
 import { PaymentAbility, SIGNABLE_SCHEMES } from "../src/ability.js";
 import { SessionBudget } from "../src/budget.js";
@@ -50,7 +51,14 @@ async function main(): Promise<void> {
       network,
       ability,
       budget,
-      createSchemeClient: () => new ExactStellarScheme(signer),
+      createSchemeClients: () => [
+        new ExactStellarScheme(signer),
+        new UptoStellarClientScheme({
+          buyerSecret: Env.stellarPrivateKey,
+          rpcUrl: Env.stellarRpcUrl,
+          network,
+        }),
+      ],
       fetchImpl: globalThis.fetch,
       explorerBaseUrl: Env.explorerBaseUrl,
     }),

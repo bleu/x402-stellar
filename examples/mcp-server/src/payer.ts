@@ -58,8 +58,8 @@ export interface PayerConfig {
   network: `${string}:${string}`;
   ability: PaymentAbility;
   budget: SessionBudget;
-  /** Builds the scheme client that signs. Injected so tests need no key. */
-  createSchemeClient: () => SchemeNetworkClient;
+  /** Builds the scheme clients that sign. Injected so tests need no key. */
+  createSchemeClients: () => SchemeNetworkClient[];
   fetchImpl: typeof globalThis.fetch;
   explorerBaseUrl?: string;
 }
@@ -248,8 +248,9 @@ export function createPayer(config: PayerConfig) {
       return response;
     };
 
-    const client = new x402Client()
-      .register(config.network, config.createSchemeClient())
+    const client = config
+      .createSchemeClients()
+      .reduce((c, scheme) => c.register(config.network, scheme), new x402Client())
       .registerPolicy((_version, requirements) => {
         // Only reached with a non-empty list: the client throws on its own when
         // no option matches a registered network and scheme.

@@ -1,5 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { authorizeEntry, Keypair, rpc, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import type {
+  Network,
+  PaymentPayloadResult,
+  PaymentRequirements,
+  SchemeNetworkClient,
+} from "@x402/core/types";
 import { getNetworkPassphrase } from "@x402/stellar";
 
 import { settleOperation, type UptoAuthorization, type UptoStellarPayload } from "../payload.js";
@@ -80,4 +86,73 @@ export async function buildUptoPayload(
   const signed = await authorizeEntry(buyerEntries[0], buyer, authValidUntil, passphrase);
 
   return { authorization: auth, authEntryXdr: signed.toXDR("base64") };
+}
+
+export type UptoPayloadBuilder = (params: BuildUptoPayloadParams) => Promise<UptoStellarPayload>;
+
+export interface UptoClientSchemeOptions {
+  /** Buyer secret key, `S...`. It signs the ceiling and never leaves here. */
+  buyerSecret: string;
+  /** Soroban RPC URL used for the read-only simulation. */
+  rpcUrl: string;
+  network: Network;
+  /** Ledgers from now until the buyer's authorization expires. */
+  validityWindowLedgers?: number;
+  /** How the payload gets built. Injected so tests need no chain. */
+  build?: UptoPayloadBuilder;
+}
+
+/**
+ * Client handler for the `upto` scheme on Stellar.
+ *
+ * Everything it needs comes from the 402 itself: the ceiling to sign, who may
+ * receive it, in which asset, and which contract and settler account the
+ * authorization is built against. Nothing is agreed out of band, so this signs
+ * for any resource server whose facilitator serves the scheme.
+ */
+export class UptoStellarClientScheme implements SchemeNetworkClient {
+  readonly scheme = "upto";
+
+  private readonly build: UptoPayloadBuilder;
+
+  constructor(private readonly options: UptoClientSchemeOptions) {
+    this.build = options.build ?? buildUptoPayload;
+  }
+
+  async createPaymentPayload(
+    x402Version: number,
+    paymentRequirements: PaymentRequirements,
+  ): Promise<PaymentPayloadResult> {
+    const contractId = readAddress(paymentRequirements, "contract");
+    const settler = readAddress(paymentRequirements, "settler");
+
+    const payload = await this.build({
+      buyerSecret: this.options.buyerSecret,
+      contractId,
+      payTo: paymentRequirements.payTo,
+      asset: paymentRequirements.asset,
+      maxAmount: BigInt(paymentRequirements.amount),
+      rpcUrl: this.options.rpcUrl,
+      network: this.options.network as `${string}:${string}`,
+      // The settler submits the settle, so the buyer must simulate against it.
+      // Simulating as itself collapses the authorization into a source-account
+      // credential, which leaves nothing detached to sign offline.
+      facilitatorAddress: settler,
+      ...(this.options.validityWindowLedgers === undefined
+        ? {}
+        : { validityWindowLedgers: this.options.validityWindowLedgers }),
+    });
+
+    return { x402Version, payload: payload as unknown as Record<string, unknown> };
+  }
+}
+
+function readAddress(requirements: PaymentRequirements, key: "contract" | "settler"): string {
+  const value = requirements.extra?.[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(
+      `upto payment requirements are missing extra.${key}; the facilitator must advertise it at /supported`,
+    );
+  }
+  return value;
 }
