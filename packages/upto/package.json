@@ -21,6 +21,10 @@
       "import": "./dist/client/index.js",
       "types": "./dist/client/index.d.ts"
     },
+    "./server": {
+      "import": "./dist/server/index.js",
+      "types": "./dist/server/index.d.ts"
+    },
     "./facilitator": {
       "import": "./dist/facilitator/index.js",
       "types": "./dist/facilitator/index.d.ts"
