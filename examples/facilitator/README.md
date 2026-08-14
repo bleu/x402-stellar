@@ -2,9 +2,9 @@
 
 Express service that verifies and settles [x402](https://www.x402.org/) payments on the Stellar network. A paywall server forwards payment headers here; the facilitator checks the transaction is valid and submits it on-chain.
 
-The service is one process composed of two modules under `src/modules/`:
+The service is one process composed of three modules under `src/modules/`:
 
-- **facilitator** — the x402 protocol endpoints (`/verify`, `/settle`, `/supported`), a thin shell over `@x402/stellar`'s `ExactStellarScheme`, which owns all payload validation and settlement machinery.
+- **facilitator** — the x402 protocol endpoints (`/verify`, `/settle`, `/supported`), a thin shell over `@x402/stellar`'s `ExactStellarScheme`, which owns all payload validation and settlement machinery. When `UPTO_CONTRACT_ID` is set, it also registers `UptoStellarScheme` (in `src/modules/facilitator/upto/`), which serves the `upto` scheme — partial settlement up to a buyer-signed cap — through the `UptoSettlement` contract in `contracts/`. `scripts/upto-e2e.ts` drives one verify-then-settle through it on testnet.
 - **catalog** — optional resource discovery backed by Postgres with pgvector. When `DATABASE_URL` is set, resources seen in successful settlements are recorded (via the facilitator's after-settle hook) and served at `GET /discovery/resources` and `GET /discovery/search` in the [x402 Bazaar](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md) shapes. Without `DATABASE_URL` the module is disabled and the facilitator runs fully stateless.
 - **prices** — optional USD rates for the `maxUsdPrice` search filter, polled from CoinGecko.
 

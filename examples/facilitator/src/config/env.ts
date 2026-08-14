@@ -100,6 +100,14 @@ export class Env {
   }
 
   /**
+   * Optional deployed UptoSettlement contract id (`C...`). When set, the
+   * facilitator also serves the `upto` scheme backed by this contract.
+   */
+  static get uptoContractId(): string | undefined {
+    return process.env.UPTO_CONTRACT_ID?.trim() || undefined;
+  }
+
+  /**
    * Optional CoinGecko demo API key. Without it the USD price feed stays off
    * and the `maxUsdPrice` search filter reports that it could not be applied.
    */
