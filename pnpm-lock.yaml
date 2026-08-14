@@ -249,6 +249,9 @@ importers:
       '@x402-stellar/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@x402-stellar/upto':
+        specifier: workspace:*
+        version: link:../../../packages/upto
       '@x402/core':
         specifier: ^2.21.0
         version: 2.21.0

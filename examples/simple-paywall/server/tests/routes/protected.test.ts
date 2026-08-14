@@ -36,6 +36,7 @@ vi.mock("../../src/middleware/payment.js", () => ({
     return [makeMock("stellar:testnet", "testnet"), makeMock("stellar:pubnet", "mainnet")];
   },
   createApiPaymentMiddlewares: () => [],
+  createUptoApiPaymentMiddlewares: () => [],
 }));
 
 vi.mock("../../src/utils/logger.js", () => {
@@ -187,8 +188,8 @@ describe("GET /.well-known/x402", () => {
     const res = await request(app).get("/.well-known/x402");
 
     const resources: string[] = res.body.resources;
-    expect(resources).toHaveLength(2);
-    expect(resources.every((r: string) => r.includes("/weather/"))).toBe(true);
+    expect(resources).toHaveLength(4);
+    expect(resources.every((r: string) => r.includes("/weather"))).toBe(true);
     expect(resources.some((r: string) => r.includes("/protected/"))).toBe(false);
   });
 
@@ -200,12 +201,20 @@ describe("GET /.well-known/x402", () => {
     expect(resources).toContain("GET /weather/mainnet");
   });
 
+  it("lists the ceiling-priced route too, so discovery sees every paid endpoint", async () => {
+    const res = await request(app).get("/.well-known/x402");
+
+    const resources: string[] = res.body.resources;
+    expect(resources).toContain("GET /weather-upto/testnet");
+    expect(resources).toContain("GET /weather-upto/mainnet");
+  });
+
   it("uses METHOD /path format per x402scan spec", async () => {
     const res = await request(app).get("/.well-known/x402");
 
     const resources: string[] = res.body.resources;
     for (const entry of resources) {
-      expect(entry).toMatch(/^GET \/weather\//);
+      expect(entry).toMatch(/^GET \/weather(-upto)?\//);
     }
   });
 

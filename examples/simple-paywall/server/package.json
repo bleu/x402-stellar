@@ -15,6 +15,7 @@
   "dependencies": {
     "@x402-stellar/paywall": "workspace:*",
     "@x402-stellar/shared": "workspace:*",
+    "@x402-stellar/upto": "workspace:*",
     "@x402/core": "^2.21.0",
     "@x402/express": "^2.21.0",
     "@x402/extensions": "^2.21.0",

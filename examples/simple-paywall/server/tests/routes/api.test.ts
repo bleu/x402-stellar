@@ -28,6 +28,7 @@ vi.mock("../../src/middleware/payment.js", () => ({
     });
     return [makeMock("stellar:testnet", "testnet"), makeMock("stellar:pubnet", "mainnet")];
   },
+  createUptoApiPaymentMiddlewares: () => [],
 }));
 
 vi.mock("../../src/utils/logger.js", () => {

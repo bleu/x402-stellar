@@ -5,6 +5,7 @@ import type { Express } from "express";
 vi.mock("../../src/middleware/payment.js", () => ({
   createPaymentMiddlewares: () => [],
   createApiPaymentMiddlewares: () => [],
+  createUptoApiPaymentMiddlewares: () => [],
 }));
 
 vi.mock("../../src/utils/logger.js", () => {

@@ -1,6 +1,8 @@
-import { Router, type Router as RouterType } from "express";
+import { Router, type Request, type Response, type Router as RouterType } from "express";
+import { setSettlementOverrides } from "@x402/express";
 import { Env, NETWORK_META } from "../config/env.js";
 import { logger } from "../utils/logger.js";
+import { uptoSettlementAmount } from "./uptoPricing.js";
 
 const router: RouterType = Router();
 
@@ -84,52 +86,93 @@ async function fetchForecast(lat: number, lon: number): Promise<ForecastCurrent 
 
 const validSuffixes = Env.networksConfig.map((n) => NETWORK_META[n.network].routeSuffix);
 
-router.get("/weather/:network", async (req, res) => {
-  if (!Env.paywallDisabled && !validSuffixes.includes(req.params.network)) {
-    res.status(404).json({ error: "Network not found" });
-    return;
-  }
+type Forecast =
+  | { ok: true; body: Record<string, unknown> }
+  | { ok: false; status: number; error: string };
 
-  const cityParam = (req.query.city as string | undefined)?.trim();
-  if (!cityParam) {
-    res.status(400).json({ error: "Missing required query parameter: city" });
-    return;
-  }
-
+async function forecastFor(city: string): Promise<Forecast> {
   try {
-    const location = await geocodeCity(cityParam);
+    const location = await geocodeCity(city);
     if (!location) {
-      res.status(404).json({ error: `City not found: ${cityParam}` });
-      return;
+      return { ok: false, status: 404, error: `City not found: ${city}` };
     }
 
     const current = await fetchForecast(location.latitude, location.longitude);
     if (!current) {
-      res.status(502).json({ error: "Failed to fetch forecast from upstream" });
-      return;
+      return { ok: false, status: 502, error: "Failed to fetch forecast from upstream" };
     }
 
-    res.json({
-      city: location.name,
-      region: location.admin1 ?? null,
-      country: location.country,
-      coordinates: {
-        latitude: location.latitude,
-        longitude: location.longitude,
+    return {
+      ok: true,
+      body: {
+        city: location.name,
+        region: location.admin1 ?? null,
+        country: location.country,
+        coordinates: {
+          latitude: location.latitude,
+          longitude: location.longitude,
+        },
+        current: {
+          weather: WMO_CODES[current.weather_code] ?? `unknown (code ${current.weather_code})`,
+          weather_code: current.weather_code,
+          temperature_f: current.temperature_2m,
+          humidity_pct: current.relative_humidity_2m,
+          wind_speed_mph: current.wind_speed_10m,
+        },
+        timestamp: new Date().toISOString(),
       },
-      current: {
-        weather: WMO_CODES[current.weather_code] ?? `unknown (code ${current.weather_code})`,
-        weather_code: current.weather_code,
-        temperature_f: current.temperature_2m,
-        humidity_pct: current.relative_humidity_2m,
-        wind_speed_mph: current.wind_speed_10m,
-      },
-      timestamp: new Date().toISOString(),
-    });
+    };
   } catch (err) {
-    logger.error({ err, city: cityParam }, "Weather API upstream error");
-    res.status(502).json({ error: "Upstream weather service unavailable" });
+    logger.error({ err, city }, "Weather API upstream error");
+    return { ok: false, status: 502, error: "Upstream weather service unavailable" };
   }
+}
+
+/** Returns the requested city, or writes the 4xx that says why it cannot. */
+function readCity(req: Request<{ network: string }>, res: Response): string | undefined {
+  if (!Env.paywallDisabled && !validSuffixes.includes(req.params.network)) {
+    res.status(404).json({ error: "Network not found" });
+    return undefined;
+  }
+
+  const city = (req.query.city as string | undefined)?.trim();
+  if (!city) {
+    res.status(400).json({ error: "Missing required query parameter: city" });
+    return undefined;
+  }
+  return city;
+}
+
+router.get("/weather/:network", async (req, res) => {
+  const city = readCity(req, res);
+  if (!city) return;
+
+  const forecast = await forecastFor(city);
+  if (!forecast.ok) {
+    res.status(forecast.status).json({ error: forecast.error });
+    return;
+  }
+  res.json(forecast.body);
+});
+
+/**
+ * The same forecast, priced with a ceiling instead of an exact amount. The
+ * buyer signs 0.003; this route decides what it actually charges once it knows
+ * whether it could answer, and a 4xx here cancels the payment outright.
+ */
+router.get("/weather-upto/:network", async (req, res) => {
+  const city = readCity(req, res);
+  if (!city) return;
+
+  const forecast = await forecastFor(city);
+  if (!forecast.ok) {
+    res.status(forecast.status).json({ error: forecast.error });
+    return;
+  }
+
+  const amount = uptoSettlementAmount(city);
+  setSettlementOverrides(res, { amount });
+  res.json({ ...forecast.body, charged: { amountAtomic: amount, scheme: "upto" } });
 });
 
 export { router as apiRouter };

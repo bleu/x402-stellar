@@ -1,6 +1,7 @@
 import type { RequestHandler } from "express";
 import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
+import { UptoStellarServerScheme } from "@x402-stellar/upto/server";
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import type { RouteConfig } from "@x402/core/http";
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";
@@ -168,10 +169,81 @@ function buildApiMiddleware(netConfig: NetworkConfig): NetworkMiddleware {
   return { network: netConfig.network, routePath, handler };
 }
 
+/**
+ * The ceiling the upto weather route quotes. The buyer signs this; the route
+ * then charges somewhere at or below it, depending on the city.
+ */
+export const WEATHER_UPTO_CAP = "0.003";
+
+/**
+ * Route config for the ceiling-priced weather endpoint. Only `upto` is offered,
+ * so an agent that reaches this route has to sign a cap rather than an amount.
+ */
+export function buildUptoApiRouteConfig(netConfig: NetworkConfig): RouteConfig {
+  return {
+    accepts: [
+      {
+        scheme: "upto",
+        price: WEATHER_UPTO_CAP,
+        network: netConfig.network,
+        payTo: netConfig.serverStellarAddress,
+      },
+    ],
+    description: "Current weather for any city, charged by city tier up to a ceiling",
+    serviceName: "Stellar Weather Upto",
+    tags: ["weather", "forecast", "upto", "ceiling"],
+    extensions: declareDiscoveryExtension({
+      input: { city: "Tokyo" },
+      inputSchema: {
+        properties: { city: { type: "string", description: "City name to look up" } },
+        required: ["city"],
+      },
+      output: {
+        example: {
+          city: "Tokyo",
+          country: "Japan",
+          current: { weather: "clear sky", temperature_f: 71.2, humidity_pct: 54 },
+          charged: { amountAtomic: "30000", scheme: "upto" },
+        },
+      },
+    }),
+  };
+}
+
+/**
+ * Its own resource server, registering only the upto scheme. Keeping it apart
+ * from the exact route means a facilitator without UPTO_CONTRACT_ID fails this
+ * route alone, and the error names the kind it could not find.
+ */
+function buildUptoApiMiddleware(netConfig: NetworkConfig): NetworkMiddleware {
+  const { facilitatorClient } = buildServerComponents(netConfig);
+
+  const x402Server = new x402ResourceServer(facilitatorClient)
+    .register(netConfig.network, new UptoStellarServerScheme())
+    .registerExtension(bazaarResourceServerExtension);
+
+  const { routeSuffix } = NETWORK_META[netConfig.network];
+  const routePath = `/weather-upto/${routeSuffix}`;
+
+  const handler = paymentMiddleware(
+    { [`GET ${routePath}`]: buildUptoApiRouteConfig(netConfig) },
+    x402Server,
+    undefined,
+    undefined,
+    true,
+  );
+
+  return { network: netConfig.network, routePath, handler };
+}
+
 export function createPaymentMiddlewares(): NetworkMiddleware[] {
   return Env.networksConfig.map(buildMiddleware);
 }
 
 export function createApiPaymentMiddlewares(): NetworkMiddleware[] {
   return Env.networksConfig.map(buildApiMiddleware);
+}
+
+export function createUptoApiPaymentMiddlewares(): NetworkMiddleware[] {
+  return Env.networksConfig.map(buildUptoApiMiddleware);
 }
