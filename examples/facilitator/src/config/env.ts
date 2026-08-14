@@ -108,6 +108,14 @@ export class Env {
   }
 
   /**
+   * Optional CoinGecko demo API key. Without it the USD price feed stays off
+   * and the `maxUsdPrice` search filter reports that it could not be applied.
+   */
+  static get coingeckoApiKey(): string | undefined {
+    return process.env.COINGECKO_API_KEY || undefined;
+  }
+
+  /**
    * Optional API key for authenticating requests to the facilitator.
    * When set, all /verify, /settle, and /supported requests must include an
    * `Authorization: Bearer <key>` header. Unset in dev mode = open access.

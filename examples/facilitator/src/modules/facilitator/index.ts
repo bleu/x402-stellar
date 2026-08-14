@@ -1,4 +1,5 @@
 import { x402Facilitator } from "@x402/core/facilitator";
+import { BAZAAR } from "@x402/extensions/bazaar";
 import type {
   PaymentPayload,
   PaymentRequirements,
@@ -59,6 +60,10 @@ export function createFacilitatorModule(catalog?: CatalogModule): FacilitatorMod
   if (uptoScheme) {
     facilitator.register(Env.stellarNetwork, uptoScheme);
   }
+
+  // Tells callers at /supported that this facilitator understands the discovery
+  // extension, which is how a resource server learns its payloads get catalogued.
+  facilitator.registerExtension(BAZAAR);
 
   const router = Router();
 

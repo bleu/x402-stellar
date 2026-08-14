@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll } from "vitest";
 import request from "supertest";
 import type express from "express";
 
+const mockRegisterExtension = vi.fn();
 const mockVerify = vi.fn().mockResolvedValue({ isValid: true });
 const mockSettle = vi.fn().mockResolvedValue({
   success: true,
@@ -20,6 +21,7 @@ vi.mock("@x402/core/facilitator", () => {
         onAfterSettle: vi.fn().mockReturnThis(),
         onSettleFailure: vi.fn().mockReturnThis(),
         register: vi.fn(),
+        registerExtension: mockRegisterExtension,
         verify: mockVerify,
         settle: mockSettle,
         getSupported: vi.fn().mockReturnValue({
@@ -97,6 +99,13 @@ describe("GET /supported", () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty("kinds");
     expect(res.body.kinds).toBeInstanceOf(Array);
+  });
+
+  // Asserted on the registration call rather than the response body: the
+  // facilitator is mocked here, so its getSupported() would echo a fixture
+  // regardless of whether the module ever registered the extension.
+  it("registers the bazaar discovery extension", () => {
+    expect(mockRegisterExtension).toHaveBeenCalledWith(expect.objectContaining({ key: "bazaar" }));
   });
 });
 

@@ -7,15 +7,29 @@ import { logger } from "./utils/logger.js";
 import { createApp } from "./app.js";
 import { createCatalogModule, type CatalogModule } from "./modules/catalog/index.js";
 import { CatalogStore } from "./modules/catalog/store.js";
+import { createMiniLmEmbedder, warmEmbedder } from "./modules/catalog/embedder.js";
+import { createPriceFeed, type PriceFeed } from "./modules/prices/index.js";
 
 async function main() {
   let catalog: CatalogModule | undefined;
+  let prices: PriceFeed | undefined;
   const databaseUrl = Env.databaseUrl;
   if (databaseUrl) {
-    const store = CatalogStore.connect(databaseUrl);
+    // Warmed before serving so a missing model is a startup failure rather than
+    // a first-query failure.
+    const embedder = createMiniLmEmbedder();
+    await warmEmbedder(embedder);
+
+    const store = CatalogStore.connect(databaseUrl, embedder);
     await store.ensureSchema();
-    catalog = createCatalogModule(store);
-    logger.info("Catalog module enabled (Postgres)");
+
+    prices = createPriceFeed({ store, apiKey: Env.coingeckoApiKey });
+    await prices.load();
+    await prices.refresh();
+    prices.start();
+
+    catalog = createCatalogModule(store, prices);
+    logger.info("Catalog module enabled (Postgres, pgvector, MiniLM embeddings)");
   } else {
     logger.info("Catalog module disabled (no DATABASE_URL)");
   }
@@ -35,6 +49,7 @@ async function main() {
     forceExit.unref();
     server.close(() => {
       clearTimeout(forceExit);
+      prices?.stop();
       const closeCatalog = catalog ? catalog.close() : Promise.resolve();
       closeCatalog
         .catch((err) => logger.error({ err }, "Catalog close failed"))
