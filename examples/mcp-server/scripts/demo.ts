@@ -103,6 +103,21 @@ async function main(): Promise<void> {
   );
   show("quality after paying", { before: target.quality, after: row?.quality });
 
+  // A second identical call, which the session budget should refuse. This is the
+  // last beat of the recording, and the only one that exercises a rejection, so
+  // it is worth rehearsing rather than discovering on camera.
+  const second = textOf(
+    await client.callTool({
+      name: "paid_request",
+      arguments: {
+        url: target.resource as string,
+        ...(call.method ? { method: call.method } : {}),
+        ...(call.queryParams ? { query: call.queryParams } : {}),
+      },
+    }),
+  );
+  show("paid_request, second call", second);
+
   process.stdout.write(`\nbudget: ${JSON.stringify(budget.report())}\n`);
 }
 
