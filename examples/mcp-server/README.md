@@ -32,10 +32,28 @@ pnpm build
 
 The buyer account needs a testnet USDC trustline and a balance. `examples/client-cli/.env` already holds a funded throwaway key for this.
 
-Needs, on localhost:
+Bring the rest of the stack up **in this order**, from the repository root:
 
-- the facilitator with its catalog enabled (`DATABASE_URL` set, seeded with `pnpm --filter @x402-stellar/facilitator seed-catalog`)
-- the `simple-paywall` server, which serves the paid endpoint the catalog knows about
+```bash
+cd examples/facilitator && docker compose up -d && cd -   # pgvector Postgres
+pnpm --filter @x402-stellar/facilitator dev               # wait for /health
+pnpm --filter @x402-stellar/facilitator seed-catalog       # 20 synthetic rows
+pnpm --filter @x402-stellar/simple-paywall-server dev     # the paid endpoint
+```
+
+The order is not cosmetic. The paywall server validates its facilitator at boot and exits if it cannot reach one, so starting it first leaves you with a dead process and a confusing `fetch failed` in its log.
+
+### Prime the catalog before you demo
+
+Seeding fills the catalog with twenty synthetic services. It does **not** put the local paid endpoint in there, because cataloging is settlement-observed: a resource appears only after someone pays it. On a fresh database the agent's first search cannot find the endpoint at all.
+
+So pay it once, with any client:
+
+```bash
+SERVER_URL=http://localhost:3001 pnpm --filter @x402-stellar/client-cli dev
+```
+
+After that the endpoint is in the catalog and ranks first for a weather query, and the agent's own payment increments its usage counters. No registration step exists — this is the mechanism working as designed, not a workaround.
 
 ## Wiring it into an agent
 
@@ -74,7 +92,16 @@ Claude Code, in `.mcp.json` at the repository root:
 pnpm demo "current weather for a city" --max-usd 0.01
 ```
 
-Runs the same server and the same tools over an in-memory transport, so a failure can be reproduced in one command instead of by re-prompting a model. It searches, pays the top payable result using the example values the catalog declared, then searches again and prints the row's usage signals before and after. `--refuse` forces the spending cap to reject, which rehearses the structured-error path.
+Runs the same server and the same tools over an in-memory transport, so a failure can be reproduced in one command instead of by re-prompting a model. It searches, pays the top payable result using the example values the catalog declared, searches again to print the row's usage signals before and after, then calls once more so the session budget refuses — every beat of the recording, in order. `--refuse` shrinks the caps to nothing so the first call is rejected too.
+
+For the refusal to land on the second call, `SESSION_BUDGET` has to leave room for exactly one payment. With the endpoint at `0.001`, use:
+
+```bash
+MAX_PAYMENT=0.01
+SESSION_BUDGET=0.0015
+```
+
+A limit the _user_ states in a prompt is not this budget: the agent passes that to `search_bazaar` as `maxUsdPrice`, which filters the catalog. Asking for something absurdly cheap therefore produces an empty search, not a payment refusal, so it does not exercise the rejection path.
 
 ## Reading a result
 
