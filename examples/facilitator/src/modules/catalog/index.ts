@@ -52,6 +52,12 @@ function parseList(raw: unknown): string[] | undefined {
   return entries.length > 0 ? entries : undefined;
 }
 
+/** An unparseable number becomes NaN so validation rejects it, not undefined. */
+function parseNumber(raw: unknown): number | undefined {
+  const value = parseString(raw);
+  return value === undefined ? undefined : Number(value);
+}
+
 /** The filters both discovery routes accept, read from the query string. */
 function parseFilters(query: Request["query"]): CatalogFilters {
   return {
@@ -64,6 +70,7 @@ function parseFilters(query: Request["query"]): CatalogFilters {
     maxAmount: parseString(query.maxAmount),
     tags: parseList(query.tags),
     urlSubstring: parseString(query.urlSubstring),
+    maxUsdPrice: parseNumber(query.maxUsdPrice),
   };
 }
 
@@ -75,7 +82,28 @@ function invalidFilterReason(filters: CatalogFilters): string | undefined {
   if (filters.maxAmount !== undefined && filters.asset?.length !== 1) {
     return "maxAmount requires exactly one asset";
   }
+  // Atomic units are whole numbers, and the value reaches a Postgres ::numeric
+  // cast. Anything else would surface as a 500 instead of a bad request.
+  if (filters.maxAmount !== undefined && !/^\d+$/.test(filters.maxAmount)) {
+    return "maxAmount must be a whole number of atomic units";
+  }
+  if (
+    filters.maxUsdPrice !== undefined &&
+    (!Number.isFinite(filters.maxUsdPrice) || filters.maxUsdPrice <= 0)
+  ) {
+    return "maxUsdPrice must be a positive number";
+  }
   return undefined;
+}
+
+/**
+ * Drops `toolName`, which is row identity rather than part of the spec's
+ * DiscoveryResource. A client reads the tool name from `extensions.bazaar`.
+ */
+function toDiscoveryResource(resource: CatalogResource): CatalogResource {
+  const served = { ...resource };
+  delete served.toolName;
+  return served;
 }
 
 /** The cheapest of a resource's observed options in USD, if any can be priced. */
@@ -89,24 +117,6 @@ function cheapestUsd(resource: CatalogResource, feed: UsdPrices): number | null 
     .filter((usd): usd is number => usd !== null);
 
   return prices.length > 0 ? Math.min(...prices) : null;
-}
-
-/**
- * Applies a USD ceiling, keeping resources whose assets have no rate.
- *
- * Dropping the unpriceable ones would quietly hide resources for a reason the
- * caller never asked about, so they stay and the response says how many escaped
- * the filter.
- */
-function applyMaxUsdPrice(
-  resources: CatalogResource[],
-  maxUsdPrice: number,
-  feed: UsdPrices,
-): CatalogResource[] {
-  return resources.filter((resource) => {
-    const usd = cheapestUsd(resource, feed);
-    return usd === null || usd <= maxUsdPrice;
-  });
 }
 
 /**
@@ -130,7 +140,11 @@ export function createCatalogModule(store: CatalogStore, prices?: UsdPrices): Ca
       const offset = parsePositiveInt(req.query.offset, 0, Number.MAX_SAFE_INTEGER);
       const { items, total } = await store.list({ ...filters, limit, offset });
 
-      res.json({ x402Version: 2, items, pagination: { limit, offset, total } });
+      res.json({
+        x402Version: 2,
+        items: items.map(toDiscoveryResource),
+        pagination: { limit, offset, total },
+      });
     } catch (error) {
       logger.error({ err: error }, "Discovery resources error");
       res.status(500).json({ error: "Internal Server Error" });
@@ -152,47 +166,33 @@ export function createCatalogModule(store: CatalogStore, prices?: UsdPrices): Ca
         return;
       }
 
-      const maxUsdPrice = parseString(req.query.maxUsdPrice);
       const limit = parsePositiveInt(req.query.limit, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
       // One extra row tells truncation from an exact fit without a second query.
-      let ranked = await store.search(query, filters, limit + 1);
+      // The ceiling is a predicate inside the ranking arms, so this row count is
+      // already post-filter and the truncation flag means what it says.
+      const ranked = await store.search(query, filters, limit + 1);
 
       const warnings: string[] = [];
-      let priceable: UsdPrices | undefined;
+      const partialResults = ranked.length > limit;
+      const resources = ranked.slice(0, limit).map(toDiscoveryResource);
 
-      if (maxUsdPrice !== undefined) {
-        const ceiling = Number(maxUsdPrice);
-        if (!Number.isFinite(ceiling) || ceiling <= 0) {
-          res.status(400).json({ error: "maxUsdPrice must be a positive number" });
-          return;
-        }
+      if (filters.maxUsdPrice !== undefined) {
         if (!prices || !prices.hasAnyPrice()) {
+          // Deliberately does not blame a missing key: the feed is equally empty
+          // when the key is set but every rate is stale or not yet fetched. With
+          // no fresh rate the SQL predicate keeps every row, so nothing filtered.
           warnings.push(
-            "maxUsdPrice was not applied: no USD price feed is available (set COINGECKO_API_KEY)",
+            "maxUsdPrice was not applied: no usable USD rate is held (the price feed is off or its rates are stale)",
           );
         } else {
-          priceable = prices;
-          ranked = applyMaxUsdPrice(ranked, ceiling, prices);
-        }
-      }
-
-      const partialResults = ranked.length > limit;
-      // `toolName` is row identity, not part of the served DiscoveryResource; a
-      // client reads the tool name from `extensions.bazaar`.
-      const resources = ranked.slice(0, limit).map((ranked) => {
-        const resource = { ...ranked };
-        delete resource.toolName;
-        return resource;
-      });
-
-      // Counted over what is actually served, so the number matches the list the
-      // caller can see rather than the extra row fetched to spot truncation.
-      if (priceable) {
-        const unpriced = resources.filter((r) => cheapestUsd(r, priceable!) === null).length;
-        if (unpriced > 0) {
-          warnings.push(
-            `${unpriced} result(s) were kept without checking maxUsdPrice because their asset has no USD rate`,
-          );
+          // Counted over what is actually served, so the number matches the list
+          // the caller sees rather than the extra row fetched to spot truncation.
+          const unpriced = resources.filter((r) => cheapestUsd(r, prices) === null).length;
+          if (unpriced > 0) {
+            warnings.push(
+              `${unpriced} result(s) were kept without checking maxUsdPrice because their asset has no USD rate`,
+            );
+          }
         }
       }
 

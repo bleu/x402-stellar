@@ -6,11 +6,15 @@ import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { createCatalogModule } from "../../src/modules/catalog/index.js";
 import type { CatalogStore } from "../../src/modules/catalog/store.js";
 
+// A spy rather than a noop, so a test can tell a deliberate early return from an
+// error the recorder swallowed on its way to the same outcome.
+const { loggerError } = vi.hoisted(() => ({ loggerError: vi.fn() }));
+
 vi.mock("../../src/utils/logger.js", () => {
   const noop = () => {};
   const noopLogger = {
     info: noop,
-    error: noop,
+    error: loggerError,
     warn: noop,
     debug: noop,
     trace: noop,
@@ -98,6 +102,7 @@ describe("catalog module", () => {
 
   beforeEach(() => {
     store = stubStore();
+    loggerError.mockClear();
   });
 
   it("records a bazaar-declaring settlement under its canonical resource url", async () => {
@@ -169,6 +174,9 @@ describe("catalog module", () => {
     await catalog.recordSettlement(context as any);
 
     expect(store.upsertWithSettlement).not.toHaveBeenCalled();
+    // Not storing is only half of it: the recorder must return early rather than
+    // reach the extraction result and throw its way to the same silence.
+    expect(loggerError).not.toHaveBeenCalled();
   });
 
   it("skips settlements whose bazaar extension fails schema validation", async () => {
@@ -253,6 +261,41 @@ describe("catalog module", () => {
         offset: 0,
       }),
     );
+  });
+
+  // The README lists maxUsdPrice as applying to both routes, and it only reached
+  // search until the ceiling became a shared predicate.
+  it("hands a usd ceiling on the list route to the store", async () => {
+    const app = express();
+    app.use(createCatalogModule(store).router);
+
+    await request(app).get("/discovery/resources").query({ maxUsdPrice: "0.01" });
+
+    expect(store.list).toHaveBeenCalledWith(expect.objectContaining({ maxUsdPrice: 0.01 }));
+  });
+
+  it("keeps the internal tool name out of the list response", async () => {
+    store.list.mockResolvedValue({
+      items: [
+        {
+          resource: "https://mcp.example.com/rpc",
+          type: "mcp",
+          toolName: "get_weather",
+          x402Version: 2,
+          accepts: [requirements],
+          lastUpdated: "2026-08-11T00:00:00.000Z",
+        },
+      ],
+      total: 1,
+    });
+
+    const app = express();
+    app.use(createCatalogModule(store).router);
+
+    const res = await request(app).get("/discovery/resources");
+
+    expect(res.body.items[0]).not.toHaveProperty("toolName");
+    expect(res.body.items[0].resource).toBe("https://mcp.example.com/rpc");
   });
 
   it("clamps bad pagination input to defaults", async () => {
@@ -373,6 +416,17 @@ describe("discovery search", () => {
     expect(store.search).not.toHaveBeenCalled();
   });
 
+  // Unchecked, the value reaches a Postgres ::numeric cast and the caller gets a
+  // 500 for what is plainly a bad request.
+  it("rejects a maxAmount that is not a whole number", async () => {
+    const res = await request(searchApp())
+      .get("/discovery/search")
+      .query({ query: "weather", maxAmount: "abc", asset: "CUSDC" });
+
+    expect(res.status).toBe(400);
+    expect(store.search).not.toHaveBeenCalled();
+  });
+
   it("serves the usage signals the store attached", async () => {
     const quality = {
       l30DaysTotalCalls: 7,
@@ -420,34 +474,33 @@ describe("discovery search", () => {
       return app;
     }
 
-    it("drops resources priced above the ceiling", async () => {
-      store.search.mockResolvedValue([
-        priced("https://cheap.example.com/a", "CUSDC", "10000"), // $0.001
-        priced("https://dear.example.com/b", "CUSDC", "1000000"), // $0.10
-      ]);
-
-      const res = await request(pricedApp())
+    // The ceiling itself is a SQL predicate, so what the route owes is handing it
+    // to the store as a number. Its filtering behaviour is proven against real
+    // SQL in catalog-store.test.ts.
+    it("hands the ceiling to the store as a filter", async () => {
+      await request(pricedApp())
         .get("/discovery/search")
         .query({ query: "weather", maxUsdPrice: "0.01" });
 
-      expect(res.body.resources.map((r: { resource: string }) => r.resource)).toEqual([
-        "https://cheap.example.com/a",
-      ]);
+      expect(store.search).toHaveBeenCalledWith(
+        "weather",
+        expect.objectContaining({ maxUsdPrice: 0.01 }),
+        11,
+      );
     });
 
-    it("converts a non-usd asset through its live rate", async () => {
-      store.search.mockResolvedValue([
-        priced("https://xlm.example.com/a", "XLM", "300000"), // 0.03 XLM = $0.0048
-      ]);
+    it("rejects a maxUsdPrice that is not a positive number", async () => {
+      for (const value of ["abc", "0", "-1"]) {
+        const res = await request(pricedApp())
+          .get("/discovery/search")
+          .query({ query: "weather", maxUsdPrice: value });
 
-      const res = await request(pricedApp())
-        .get("/discovery/search")
-        .query({ query: "weather", maxUsdPrice: "0.01" });
-
-      expect(res.body.resources).toHaveLength(1);
+        expect(res.status).toBe(400);
+      }
+      expect(store.search).not.toHaveBeenCalled();
     });
 
-    it("keeps a resource it cannot price and says how many were not judged", async () => {
+    it("says how many served results escaped the ceiling unpriced", async () => {
       store.search.mockResolvedValue([
         priced("https://cheap.example.com/a", "CUSDC", "10000"),
         priced("https://unmapped.example.com/b", "CMYSTERYASSET", "1"),
@@ -457,9 +510,6 @@ describe("discovery search", () => {
         .get("/discovery/search")
         .query({ query: "weather", maxUsdPrice: "0.01" });
 
-      expect(res.body.resources.map((r: { resource: string }) => r.resource)).toContain(
-        "https://unmapped.example.com/b",
-      );
       expect(res.body.warnings).toEqual([expect.stringContaining("1")]);
     });
 
@@ -480,7 +530,10 @@ describe("discovery search", () => {
         .get("/discovery/search")
         .query({ query: "weather", maxUsdPrice: "0.01" });
 
-      expect(res.body.warnings).toEqual([expect.stringContaining("no USD price feed")]);
+      expect(res.body.warnings).toEqual([expect.stringContaining("no usable USD rate")]);
+      // An empty feed is equally the shape of a set key whose rates went stale,
+      // so the warning must not pin it on a missing key.
+      expect(res.body.warnings[0]).not.toContain("COINGECKO_API_KEY");
       expect(res.body.resources).toHaveLength(1);
     });
 
@@ -507,27 +560,6 @@ describe("discovery search", () => {
       const res = await request(pricedApp()).get("/discovery/search").query({ query: "weather" });
 
       expect(res.body).not.toHaveProperty("warnings");
-    });
-
-    it("judges a resource by its cheapest acceptable option", async () => {
-      store.search.mockResolvedValue([
-        {
-          resource: "https://multi.example.com/a",
-          type: "http",
-          x402Version: 2,
-          accepts: [
-            { ...requirements, asset: "CUSDC", amount: "1000000" }, // $0.10
-            { ...requirements, asset: "XLM", amount: "300000" }, // $0.0048
-          ],
-          lastUpdated: "2026-08-13T00:00:00.000Z",
-        },
-      ]);
-
-      const res = await request(pricedApp())
-        .get("/discovery/search")
-        .query({ query: "weather", maxUsdPrice: "0.01" });
-
-      expect(res.body.resources).toHaveLength(1);
     });
   });
 

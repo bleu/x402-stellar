@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 
 import { CatalogStore, resourceKey } from "../../src/modules/catalog/store.js";
 import { EMBEDDING_DIMENSIONS, type Embedder } from "../../src/modules/catalog/embedder.js";
+import { PRICE_MAX_AGE_MS } from "../../src/modules/prices/index.js";
 
 /**
  * A deterministic stand-in for MiniLM. Three topic axes are scored by how many
@@ -343,6 +344,142 @@ describe.skipIf(!TEST_DATABASE_URL)("CatalogStore against Postgres", () => {
       expect(await resources({ extensions: "bazaar" })).toEqual([
         "https://weather.example.com/forecast",
       ]);
+    });
+  });
+
+  /**
+   * The ceiling is a predicate rather than a pass over fetched rows, so an
+   * affordable resource ranked below the page can still be reached. These run
+   * against real rates in asset_usd_prices for that reason.
+   */
+  describe("maxUsdPrice", () => {
+    // 1 USDC = $1 and 1 XLM = $0.16, at 7 decimals.
+    async function saveRates(fetchedAt = new Date()) {
+      await store.savePrices([
+        { asset: "CUSDC", coingeckoId: "usd-coin", usdPrice: "1", fetchedAt },
+        { asset: "XLM", coingeckoId: "stellar", usdPrice: "0.16", fetchedAt },
+      ]);
+    }
+
+    async function seedPriced() {
+      await store.upsert({
+        resource: "https://cheap.example.com/a",
+        type: "http",
+        method: "GET",
+        x402Version: 2,
+        accepts: [{ ...requirements, asset: "CUSDC", amount: "10000" }], // $0.001
+      });
+      await store.upsert({
+        resource: "https://dear.example.com/b",
+        type: "http",
+        method: "GET",
+        x402Version: 2,
+        accepts: [{ ...requirements, asset: "CUSDC", amount: "1000000" }], // $0.10
+      });
+      await store.upsert({
+        resource: "https://xlm.example.com/c",
+        type: "http",
+        method: "GET",
+        x402Version: 2,
+        accepts: [{ ...requirements, asset: "XLM", amount: "300000" }], // $0.0048
+      });
+      await store.upsert({
+        resource: "https://unmapped.example.com/d",
+        type: "http",
+        method: "GET",
+        x402Version: 2,
+        accepts: [{ ...requirements, asset: "CMYSTERY", amount: "1" }],
+      });
+    }
+
+    async function underCeiling(maxUsdPrice: number) {
+      const { items } = await store.list({ limit: 20, offset: 0, maxUsdPrice });
+      return items.map((i) => i.resource).sort();
+    }
+
+    beforeEach(async () => {
+      await saveRates();
+      await seedPriced();
+    });
+
+    it("drops a resource priced above the ceiling", async () => {
+      expect(await underCeiling(0.01)).not.toContain("https://dear.example.com/b");
+    });
+
+    it("keeps a resource priced below the ceiling", async () => {
+      expect(await underCeiling(0.01)).toContain("https://cheap.example.com/a");
+    });
+
+    it("converts a non-usd asset through its stored rate", async () => {
+      expect(await underCeiling(0.01)).toContain("https://xlm.example.com/c");
+      expect(await underCeiling(0.001)).not.toContain("https://xlm.example.com/c");
+    });
+
+    it("keeps a resource whose asset has no rate rather than hiding it", async () => {
+      expect(await underCeiling(0.01)).toContain("https://unmapped.example.com/d");
+    });
+
+    it("judges a resource by its cheapest priceable option", async () => {
+      await store.upsert({
+        resource: "https://multi.example.com/e",
+        type: "http",
+        method: "GET",
+        x402Version: 2,
+        accepts: [
+          { ...requirements, asset: "CUSDC", amount: "1000000" }, // $0.10
+          { ...requirements, asset: "XLM", amount: "300000" }, // $0.0048
+        ],
+      });
+
+      expect(await underCeiling(0.01)).toContain("https://multi.example.com/e");
+    });
+
+    it("treats a rate older than the max age as no rate at all", async () => {
+      await store.truncateForTests();
+      await saveRates(new Date(Date.now() - PRICE_MAX_AGE_MS - 60_000));
+      await seedPriced();
+
+      // Every rate is stale, so nothing is priceable and nothing is hidden.
+      expect(await underCeiling(0.01)).toContain("https://dear.example.com/b");
+    });
+
+    it("reaches an affordable resource that ranks below the requested page", async () => {
+      // The defect this replaced: the ceiling ran over rows the ranking had
+      // already truncated, so a cheap match below the cut was never fetched.
+      //
+      // Every row here carries the same description, so ranking falls to the
+      // resource url tiebreak. The names put the expensive rows first on purpose:
+      // without the ceiling as a predicate, the cheap one sits below the page.
+      for (let index = 0; index < 12; index += 1) {
+        await store.upsert({
+          resource: `https://aaa-dear-${index}.example.com/forecast`,
+          type: "http",
+          method: "GET",
+          x402Version: 2,
+          accepts: [{ ...requirements, asset: "CUSDC", amount: "1000000" }], // $0.10
+          description: "hourly weather forecast for a city",
+        });
+      }
+      await store.upsert({
+        resource: "https://zzz-cheap.example.com/forecast",
+        type: "http",
+        method: "GET",
+        x402Version: 2,
+        accepts: [{ ...requirements, asset: "CUSDC", amount: "10000" }], // $0.001
+        description: "hourly weather forecast for a city",
+      });
+
+      const unfiltered = await store.search("hourly weather forecast for a city", {}, 5);
+      expect(unfiltered.map((h) => h.resource)).not.toContain(
+        "https://zzz-cheap.example.com/forecast",
+      );
+
+      const hits = await store.search(
+        "hourly weather forecast for a city",
+        { maxUsdPrice: 0.01 },
+        5,
+      );
+      expect(hits.map((h) => h.resource)).toContain("https://zzz-cheap.example.com/forecast");
     });
   });
 

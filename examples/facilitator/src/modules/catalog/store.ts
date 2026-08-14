@@ -2,7 +2,7 @@ import pg from "pg";
 
 import { logger } from "../../utils/logger.js";
 import { type Embedder, toVectorLiteral } from "./embedder.js";
-import type { AssetPrice } from "../prices/index.js";
+import { ASSET_DECIMALS, PRICE_MAX_AGE_MS, type AssetPrice } from "../prices/index.js";
 
 /** Pool or a checked-out client, so writes can share one transaction. */
 type Queryable = Pick<pg.Pool, "query"> | Pick<pg.PoolClient, "query">;
@@ -96,6 +96,8 @@ export interface CatalogFilters {
   tags?: string[];
   /** Case-insensitive substring of the resource url. */
   urlSubstring?: string;
+  /** USD ceiling across every option whose asset has a fresh rate. */
+  maxUsdPrice?: number;
 }
 
 export interface ListFilters extends CatalogFilters {
@@ -153,7 +155,29 @@ function buildPredicates(filters: CatalogFilters, params: Params): string[] {
   if (filters.tags?.length) where.push(`tags ?| ${params.add(filters.tags)}::text[]`);
 
   if (filters.urlSubstring) {
-    where.push(`resource ILIKE '%' || ${params.add(filters.urlSubstring)} || '%'`);
+    // A substring is a literal, so LIKE's own wildcards are escaped rather than
+    // letting a caller's `%` or `_` widen the match. Backslash is LIKE's default
+    // escape character.
+    const literal = filters.urlSubstring.replace(/[\\%_]/g, "\\$&");
+    where.push(`resource ILIKE '%' || ${params.add(literal)} || '%'`);
+  }
+
+  // A ceiling in USD, converted per option from the rates table. A resource none
+  // of whose assets has a fresh rate is kept rather than hidden for a reason the
+  // caller never asked about, so the two branches are "nothing priceable" OR
+  // "something priceable and cheap enough".
+  if (filters.maxUsdPrice !== undefined) {
+    const ceiling = params.add(filters.maxUsdPrice);
+    const maxAge = params.add(PRICE_MAX_AGE_MS / 1000);
+    const pricedOption = `SELECT 1 FROM jsonb_array_elements(accepts) e
+                            JOIN asset_usd_prices p ON p.asset = e->>'asset'
+                           WHERE p.fetched_at > now() - make_interval(secs => ${maxAge})`;
+    where.push(
+      `(NOT EXISTS (${pricedOption})
+        OR EXISTS (${pricedOption}
+                     AND ((e->>'amount')::numeric / 10 ^ ${ASSET_DECIMALS}) * p.usd_price
+                         <= ${ceiling}))`,
+    );
   }
 
   return where;
@@ -494,8 +518,12 @@ export class CatalogStore {
    * One accepts entry per call (the requirements the settlement used). On
    * conflict the entry for the same asset is replaced and other assets are
    * kept, so multi-asset resources accumulate options with fresh amounts.
-   * Options a server stops accepting linger until declaration-based
-   * population (STE-61) replaces settlement observation.
+   *
+   * A settlement only ever shows an option that was used, never one withdrawn,
+   * so an option a server stops offering ages out rather than being corrected.
+   * Declaring the extension does not help: it describes endpoint shape, and
+   * PaymentRequired.accepts never reaches a facilitator. Only fetching the 402
+   * from the resource would give the declared set.
    */
   async upsert(resource: CatalogRecord, executor: Queryable = this.pool): Promise<void> {
     // Embedding runs inline on the settle path, a known cost on the money path.
