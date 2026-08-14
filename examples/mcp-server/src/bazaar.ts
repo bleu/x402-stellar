@@ -1,6 +1,7 @@
 import type { DiscoveryResource, SearchDiscoveryResourcesResponse } from "@x402/extensions/bazaar";
 
-import { AssetAllowlist, fromAtomic } from "./assets.js";
+import type { PaymentAbility, PaymentOptionLike } from "./ability.js";
+import { fromAtomic } from "./assets.js";
 import { ToolError } from "./errors.js";
 
 /**
@@ -31,12 +32,13 @@ export interface CompactResource {
   tags?: string[];
   method?: string;
   routeTemplate?: string;
-  /** Whether this server can pay for it at all, per the asset allowlist. */
+  /** Whether this server can pay for it at all: asset allowlist and scheme. */
   payable: boolean;
   price?: {
     amountAtomic: string;
     asset: string;
     network: string;
+    scheme?: string;
     decimals?: number;
     usd?: string;
   };
@@ -57,7 +59,7 @@ export interface CompactSearchResult {
 
 interface BazaarDeps {
   facilitatorUrl: string;
-  assets: AssetAllowlist;
+  ability: PaymentAbility;
   fetchImpl: typeof globalThis.fetch;
 }
 
@@ -112,31 +114,31 @@ function toCallShape(
  */
 function pickOption(
   resource: DiscoveryResource,
-  assets: AssetAllowlist,
-): { option: Record<string, unknown>; payable: boolean } | undefined {
-  const options = (resource.accepts ?? []) as unknown as Record<string, unknown>[];
+  ability: PaymentAbility,
+): { option: PaymentOptionLike; payable: boolean } | undefined {
+  const options = (resource.accepts ?? []) as unknown as PaymentOptionLike[];
   if (options.length === 0) return undefined;
 
-  const payableOptions = options.filter((option) =>
-    assets.allows(option.network as string, option.asset as string),
-  );
+  const payableOptions = options.filter((option) => ability.canPay(option));
 
   if (payableOptions.length === 0) {
     return { option: options[0], payable: false };
   }
 
   const cheapest = payableOptions.reduce((best, option) => {
-    const bestAmount = BigInt((best.amount as string) ?? "0");
-    const amount = BigInt((option.amount as string) ?? "0");
+    const bestAmount = BigInt(best.amount ?? "0");
+    const amount = BigInt(option.amount ?? "0");
     return amount < bestAmount ? option : best;
   });
   return { option: cheapest, payable: true };
 }
 
-function toCompact(resource: DiscoveryResource, assets: AssetAllowlist): CompactResource {
-  const picked = pickOption(resource, assets);
+function toCompact(resource: DiscoveryResource, ability: PaymentAbility): CompactResource {
+  const picked = pickOption(resource, ability);
   const option = picked?.option;
-  const declared = assets.find(option?.network as string, option?.asset as string);
+  // Only priced in USD when the option is genuinely payable: an allowlisted
+  // asset under an unsignable scheme is not a price this wallet can act on.
+  const declared = picked?.payable && option ? ability.assetFor(option) : undefined;
 
   return {
     resource: resource.resource,
@@ -151,12 +153,13 @@ function toCompact(resource: DiscoveryResource, assets: AssetAllowlist): Compact
             amountAtomic: String(option.amount ?? ""),
             asset: String(option.asset ?? ""),
             network: String(option.network ?? ""),
+            ...(option.scheme ? { scheme: option.scheme } : {}),
             ...(declared
               ? {
                   decimals: declared.decimals,
                   // Payable assets are declared USD stablecoins, so atomic units
                   // convert without asking a price feed.
-                  usd: fromAtomic(BigInt((option.amount as string) ?? "0"), declared.decimals),
+                  usd: fromAtomic(BigInt(option.amount ?? "0"), declared.decimals),
                 }
               : {}),
           },
@@ -217,7 +220,7 @@ export async function searchBazaar(
     });
   }
 
-  const results = (body.resources ?? []).map((resource) => toCompact(resource, deps.assets));
+  const results = (body.resources ?? []).map((resource) => toCompact(resource, deps.ability));
   const unpayable = results.filter((result) => !result.payable).length;
   // `searchMethod` and `warnings` are our facilitator's additions to the spec's
   // response, so they are read off the side of the SDK type rather than in it.
@@ -232,7 +235,7 @@ export async function searchBazaar(
     ...(unpayable > 0
       ? {
           notes: [
-            `${unpayable} result(s) are priced in an asset this wallet cannot pay (payable: ${deps.assets.describe()}). They are listed but paid_request will refuse them.`,
+            `${unpayable} result(s) cannot be paid by this wallet, which holds ${deps.ability.describe()}. They are listed but paid_request will refuse them.`,
           ],
         }
       : {}),

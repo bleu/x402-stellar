@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SessionBudget } from "../src/budget.js";
 import { BUDGET_DECIMALS, toAtomic } from "../src/assets.js";
 import { createPayer } from "../src/payer.js";
-import { NETWORK, TESTNET_USDC, XLM, assets, connect, isError, resultBody } from "./helpers.js";
+import { NETWORK, TESTNET_USDC, XLM, ability, connect, isError, resultBody } from "./helpers.js";
 
 const PAYER = "GCRXEB4BNIMRSNUZNAXQS2S7ZV236ZZEAENFYUOZLLTIQ3QMTNQZQ55Y";
 const RESOURCE = "http://localhost:3001/paid/thing";
@@ -89,7 +89,7 @@ function harness(responses: Response[], limits = { perCall: "0.01", session: "0.
 
   const pay = createPayer({
     network: NETWORK as `${string}:${string}`,
-    assets,
+    ability,
     budget,
     createSchemeClient: fakeScheme,
     fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,
@@ -190,7 +190,42 @@ describe("paid_request", () => {
 
     await expect(pay({ url: RESOURCE })).rejects.toMatchObject({
       code: "network_not_supported",
+      details: { offered: ["exact on eip155:8453"] },
     });
+  });
+
+  it("tells an unsignable scheme apart from an unknown network", async () => {
+    // The facilitator serves upto; this wallet registers no client scheme for it.
+    // Both cases reach us as one message from the client, so the 402 we recorded
+    // is what makes the distinction, and the agent must not be told the network
+    // was wrong when the network was fine.
+    const { pay } = harness([paymentRequired([requirements({ scheme: "upto" })])]);
+
+    await expect(pay({ url: RESOURCE })).rejects.toMatchObject({
+      code: "scheme_not_supported",
+      details: { offered: [`upto on ${NETWORK}`] },
+    });
+  });
+
+  it("refuses an unsignable scheme even when the asset is allowlisted", async () => {
+    const { pay, budget } = harness([
+      paymentRequired([requirements({ scheme: "upto", asset: TESTNET_USDC })]),
+    ]);
+
+    await expect(pay({ url: RESOURCE })).rejects.toMatchObject({
+      code: "scheme_not_supported",
+    });
+    expect(budget.spent).toBe(0n);
+  });
+
+  it("picks the signable scheme when the resource offers both", async () => {
+    const { pay } = harness([
+      paymentRequired([requirements({ scheme: "upto", amount: "1" }), requirements()]),
+      settled(),
+    ]);
+
+    const result = await pay({ url: RESOURCE });
+    expect(result.settlement).toMatchObject({ success: true, amountAtomic: "10000" });
   });
 
   it("rejects a relative url and a non-http scheme", async () => {
@@ -244,7 +279,7 @@ describe("paid_request", () => {
     );
     const pay = createPayer({
       network: NETWORK as `${string}:${string}`,
-      assets,
+      ability,
       budget,
       createSchemeClient: fakeScheme,
       fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,
@@ -266,7 +301,7 @@ describe("paid_request", () => {
     );
     const pay = createPayer({
       network: NETWORK as `${string}:${string}`,
-      assets,
+      ability,
       budget,
       createSchemeClient: fakeScheme,
       fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,

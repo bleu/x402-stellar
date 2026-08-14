@@ -1,16 +1,11 @@
 import { x402Client } from "@x402/core/client";
-import { decodePaymentResponseHeader } from "@x402/core/http";
+import { decodePaymentRequiredHeader, decodePaymentResponseHeader } from "@x402/core/http";
 import type { PaymentRequirements, SchemeNetworkClient, SettleResponse } from "@x402/core/types";
 import { FacilitatorTimeoutError, SettleError, VerifyError } from "@x402/core/types";
 import { wrapFetchWithPayment } from "@x402/fetch";
 
-import {
-  AssetAllowlist,
-  fromAtomic,
-  parseAtomicAmount,
-  toBudgetUnits,
-  type PayableAsset,
-} from "./assets.js";
+import type { PaymentAbility } from "./ability.js";
+import { fromAtomic, parseAtomicAmount, toBudgetUnits, type PayableAsset } from "./assets.js";
 import type { BudgetReport, SessionBudget } from "./budget.js";
 import { ToolError, type ToolErrorCode } from "./errors.js";
 import { logger } from "./logger.js";
@@ -61,7 +56,7 @@ export interface PaidRequestOutput {
 
 export interface PayerConfig {
   network: `${string}:${string}`;
-  assets: AssetAllowlist;
+  ability: PaymentAbility;
   budget: SessionBudget;
   /** Builds the scheme client that signs. Injected so tests need no key. */
   createSchemeClient: () => SchemeNetworkClient;
@@ -73,6 +68,12 @@ export interface PayerConfig {
 interface CallContext {
   refusal?: ToolError;
   signed?: { amountAtomic: bigint; asset: PayableAsset; requirements: PaymentRequirements };
+  /**
+   * What the 402 offered. The client throws on an unregistered network or
+   * scheme before any policy or hook of ours runs, so without this the refusal
+   * could not say which of the two was actually wrong.
+   */
+  offered?: PaymentRequirements[];
 }
 
 function assertUsableUrl(raw: string): URL {
@@ -134,7 +135,11 @@ async function readBody(response: Response): Promise<{ body: unknown; truncated:
  * would otherwise be lost. After that, anything thrown once a payment was signed
  * is indeterminate rather than failed: the payment was already on its way.
  */
-function classify(error: unknown, context: CallContext): ToolError {
+function classify(
+  error: unknown,
+  context: CallContext,
+  config: Pick<PayerConfig, "network" | "ability">,
+): ToolError {
   if (context.refusal) return context.refusal;
 
   if (error instanceof VerifyError) {
@@ -156,12 +161,27 @@ function classify(error: unknown, context: CallContext): ToolError {
 
   const message = error instanceof Error ? error.message : String(error);
 
-  // Thrown by the client before any policy or hook runs, so there is no refusal
-  // of ours to report and the raw message is the only signal.
+  // Thrown by the client before any policy or hook of ours runs, and it uses one
+  // message for both an unknown network and an unknown scheme. The 402 we
+  // recorded says which it really was, so the agent is not told the wrong thing.
   if (message.includes("No network/scheme registered")) {
+    const offered = context.offered ?? [];
+    const onOurNetwork = offered.filter((option) => option.network === config.network);
+    const details = {
+      offered: offered.map((option) => `${option.scheme} on ${option.network}`),
+    };
+
+    if (onOurNetwork.length > 0) {
+      return new ToolError(
+        "scheme_not_supported",
+        `The resource asks for a payment scheme this wallet cannot sign. It holds ${config.ability.describe()}.`,
+        details,
+      );
+    }
     return new ToolError(
       "network_not_supported",
-      "The resource offered no payment option on a network and scheme this wallet is configured for",
+      `The resource offered no payment option on ${config.network}`,
+      details,
     );
   }
 
@@ -210,33 +230,48 @@ export function createPayer(config: PayerConfig) {
 
     const context: CallContext = {};
 
+    // Records what the 402 offered on its way past. Headers only, so the body
+    // the wrapper reads next is untouched.
+    const observingFetch: typeof globalThis.fetch = async (target, init) => {
+      const response = await config.fetchImpl(target, init);
+      if (response.status === 402) {
+        const header =
+          response.headers.get("PAYMENT-REQUIRED") ?? response.headers.get("X-PAYMENT-REQUIRED");
+        if (header) {
+          try {
+            context.offered = decodePaymentRequiredHeader(header).accepts;
+          } catch (error) {
+            logger.debug({ err: error }, "Could not decode PAYMENT-REQUIRED for diagnostics");
+          }
+        }
+      }
+      return response;
+    };
+
     const client = new x402Client()
       .register(config.network, config.createSchemeClient())
       .registerPolicy((_version, requirements) => {
         // Only reached with a non-empty list: the client throws on its own when
         // no option matches a registered network and scheme.
-        const payable = requirements.filter((option) =>
-          config.assets.allows(option.network, option.asset),
-        );
+        const payable = requirements.filter((option) => config.ability.canPay(option));
 
         if (payable.length === 0) {
           context.refusal = new ToolError(
             "asset_not_allowed",
-            `The resource asks for payment in an asset this wallet does not hold. Payable: ${config.assets.describe()}.`,
+            `The resource asks for payment in an asset this wallet does not hold. It holds ${config.ability.describe()}.`,
             { offered: requirements.map((option) => `${option.asset} on ${option.network}`) },
           );
         }
         return payable;
       })
       .onBeforePaymentCreation(async ({ selectedRequirements }) => {
-        const declared = config.assets.find(
-          selectedRequirements.network,
-          selectedRequirements.asset,
-        );
+        const declared = config.ability.canPay(selectedRequirements)
+          ? config.ability.assetFor(selectedRequirements)
+          : undefined;
         if (!declared) {
           context.refusal = new ToolError(
             "asset_not_allowed",
-            `Selected option pays in ${selectedRequirements.asset}, which is not payable. Payable: ${config.assets.describe()}.`,
+            `Selected option pays in ${selectedRequirements.asset}, which is not payable. This wallet holds ${config.ability.describe()}.`,
           );
           return { abort: true, reason: context.refusal.reason };
         }
@@ -270,10 +305,7 @@ export function createPayer(config: PayerConfig) {
         return undefined;
       })
       .onAfterPaymentCreation(async ({ selectedRequirements }) => {
-        const declared = config.assets.find(
-          selectedRequirements.network,
-          selectedRequirements.asset,
-        );
+        const declared = config.ability.assetFor(selectedRequirements);
         if (!declared) return;
 
         const atomic = parseAtomicAmount(selectedRequirements.amount);
@@ -286,7 +318,7 @@ export function createPayer(config: PayerConfig) {
         };
       });
 
-    const payingFetch = wrapFetchWithPayment(config.fetchImpl, client);
+    const payingFetch = wrapFetchWithPayment(observingFetch, client);
 
     let response: Response;
     try {
@@ -302,7 +334,7 @@ export function createPayer(config: PayerConfig) {
           : {}),
       });
     } catch (error) {
-      throw classify(error, context);
+      throw classify(error, context, config);
     }
 
     const settlement = readSettlement(response);

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { AssetAllowlist } from "./assets.js";
+import type { PaymentAbility } from "./ability.js";
 import { searchBazaar, type SearchParams } from "./bazaar.js";
 import { toErrorBody } from "./errors.js";
 import { logger } from "./logger.js";
@@ -13,13 +13,13 @@ import type { PaidRequestInput, PaidRequestOutput } from "./payer.js";
  * the agent where to go, which is the one thing this demo claims not to do.
  * A test asserts the seed corpus's service names appear nowhere in them.
  */
-function searchDescription(assets: AssetAllowlist): string {
+function searchDescription(ability: PaymentAbility): string {
   return [
     "Search the x402 Bazaar for paid API endpoints that can serve a request.",
     "The Bazaar is a catalog of endpoints that charge per call. Each result carries its price,",
     "the parameters it accepts and an example call, so an endpoint can be used with no prior integration.",
     "Set maxUsdPrice, a number of US dollars, when the user states a spending limit.",
-    `Results marked payable: false are priced in an asset this wallet cannot pay (it holds ${assets.describe()});`,
+    `Results marked payable: false cannot be paid by this wallet, which holds ${ability.describe()};`,
     "they are still listed so the reason a request cannot be served is visible.",
   ].join(" ");
 }
@@ -36,7 +36,7 @@ function payDescription(): string {
 
 export interface ServerDeps {
   facilitatorUrl: string;
-  assets: AssetAllowlist;
+  ability: PaymentAbility;
   fetchImpl: typeof globalThis.fetch;
   pay(input: PaidRequestInput): Promise<PaidRequestOutput>;
 }
@@ -60,7 +60,7 @@ export function createMcpServer(deps: ServerDeps): McpServer {
     "search_bazaar",
     {
       title: "Search the x402 Bazaar",
-      description: searchDescription(deps.assets),
+      description: searchDescription(deps.ability),
       inputSchema: {
         query: z.string().min(1).describe("What the endpoint should do, in natural language"),
         maxUsdPrice: z
@@ -82,7 +82,7 @@ export function createMcpServer(deps: ServerDeps): McpServer {
       try {
         const params: SearchParams = { ...args, limit: args.limit ?? 5 };
         const result = await searchBazaar(
-          { facilitatorUrl: deps.facilitatorUrl, assets: deps.assets, fetchImpl: deps.fetchImpl },
+          { facilitatorUrl: deps.facilitatorUrl, ability: deps.ability, fetchImpl: deps.fetchImpl },
           params,
         );
         return jsonResult(result);

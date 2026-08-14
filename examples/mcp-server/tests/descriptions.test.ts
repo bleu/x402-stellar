@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { payDescription, searchDescription } from "../src/server.js";
 import { TOOL_ERROR_CODES } from "../src/errors.js";
-import { assets, connect } from "./helpers.js";
+import { ability, connect } from "./helpers.js";
 
 /**
  * Words that would give the agent prior knowledge of a service. The claim in
@@ -24,7 +24,7 @@ const FORBIDDEN_IN_DESCRIPTIONS = [
 
 describe("tool descriptions", () => {
   it("name no service, domain or subject area", () => {
-    const text = [searchDescription(assets), payDescription()].join(" ").toLowerCase();
+    const text = [searchDescription(ability), payDescription()].join(" ").toLowerCase();
 
     for (const forbidden of FORBIDDEN_IN_DESCRIPTIONS) {
       expect(text, `"${forbidden}" must not appear in a tool description`).not.toContain(forbidden);
@@ -32,12 +32,12 @@ describe("tool descriptions", () => {
   });
 
   it("still tell the agent what it can pay in and what the parameters mean", () => {
-    const search = searchDescription(assets);
+    const search = searchDescription(ability);
 
     // Documenting units and the wallet's own limits is not a hint about a service.
     expect(search).toContain("maxUsdPrice");
     expect(search).toContain("US dollars");
-    expect(search).toContain(assets.describe());
+    expect(search).toContain(ability.describe());
     expect(payDescription()).toContain("402");
   });
 
@@ -46,7 +46,7 @@ describe("tool descriptions", () => {
     const { tools } = await client.listTools();
 
     const search = tools.find((tool) => tool.name === "search_bazaar");
-    expect(search?.description).toBe(searchDescription(assets));
+    expect(search?.description).toBe(searchDescription(ability));
   });
 });
 

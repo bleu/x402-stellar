@@ -4,7 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createEd25519Signer } from "@x402/stellar";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
 
-import { BUDGET_DECIMALS, toAtomic } from "../src/assets.js";
+import { PaymentAbility, SIGNABLE_SCHEMES } from "../src/ability.js";
 import { SessionBudget } from "../src/budget.js";
 import { Env } from "../src/config/env.js";
 import { createPayer } from "../src/payer.js";
@@ -37,18 +37,18 @@ function textOf(result: unknown): Record<string, unknown> {
 }
 
 async function main(): Promise<void> {
-  const assets = Env.assets;
   const network = Env.stellarNetwork;
+  const ability = new PaymentAbility(Env.assets, SIGNABLE_SCHEMES);
   const budget = new SessionBudget(refuse ? 1n : Env.maxPayment, refuse ? 1n : Env.sessionBudget);
   const signer = createEd25519Signer(Env.stellarPrivateKey, network);
 
   const server = createMcpServer({
     facilitatorUrl: Env.facilitatorUrl,
-    assets,
+    ability,
     fetchImpl: globalThis.fetch,
     pay: createPayer({
       network,
-      assets,
+      ability,
       budget,
       createSchemeClient: () => new ExactStellarScheme(signer),
       fetchImpl: globalThis.fetch,

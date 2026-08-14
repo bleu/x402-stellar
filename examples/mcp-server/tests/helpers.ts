@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
+import { PaymentAbility, SIGNABLE_SCHEMES } from "../src/ability.js";
 import { AssetAllowlist, DEFAULT_PAYABLE_ASSETS } from "../src/assets.js";
 import { createMcpServer, type ServerDeps } from "../src/server.js";
 
@@ -9,12 +10,13 @@ export const NETWORK = DEFAULT_PAYABLE_ASSETS[0].network;
 export const XLM = "CXLMUNMAPPEDASSETCONTRACTADDRESSFORTESTINGONLY000000000";
 
 export const assets = new AssetAllowlist(DEFAULT_PAYABLE_ASSETS);
+export const ability = new PaymentAbility(assets, SIGNABLE_SCHEMES);
 
 /** Drives the real server over an in-memory transport, as a client would. */
 export async function connect(deps: Partial<ServerDeps> = {}): Promise<Client> {
   const server = createMcpServer({
     facilitatorUrl: "http://facilitator.test",
-    assets,
+    ability,
     fetchImpl: (async () => {
       throw new Error("fetch not stubbed");
     }) as unknown as typeof globalThis.fetch,

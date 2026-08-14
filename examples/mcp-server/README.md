@@ -16,7 +16,7 @@ The facilitator never sees the key either. It receives a signed authorization fo
 What bounds the damage if an agent is talked into spending by injected text (a catalog description and an API response both land in the model's context, and both are written by someone else):
 
 - `MAX_PAYMENT` caps one call; `SESSION_BUDGET` caps the process's whole lifetime.
-- `PAYABLE_ASSETS` is an allowlist. A 402 asking for anything else is refused before signing, so a hostile server cannot get a signature for a token we cannot value.
+- `PAYABLE_ASSETS` is an allowlist, and only the `exact` scheme is signable. A 402 asking for anything else is refused before signing, so a hostile server cannot get a signature for a token we cannot value or a mechanism we did not audit.
 - Payment headers cannot be supplied by the caller, so the agent cannot forge one.
 - The MCP client asks the human to approve each tool call, which is where the URL and arguments become visible.
 
@@ -110,7 +110,9 @@ Every failure carries a code from a closed set and a reason that is never null:
 }
 ```
 
-Codes this server raises itself: `cap_exceeded`, `session_budget_exhausted`, `asset_not_allowed`, `network_not_supported`, `invalid_url`, `forbidden_header`, `no_acceptable_payment_option`. Codes for a failure further down: `payment_required_malformed`, `verify_failed`, `settle_failed`, `settle_indeterminate`, `upstream_error`, `transport_error`. Discovery's: `search_unavailable`, `search_failed`. Anything unforeseen becomes `internal_error`.
+Codes this server raises itself: `cap_exceeded`, `session_budget_exhausted`, `asset_not_allowed`, `network_not_supported`, `scheme_not_supported`, `invalid_url`, `forbidden_header`, `no_acceptable_payment_option`. Codes for a failure further down: `payment_required_malformed`, `verify_failed`, `settle_failed`, `settle_indeterminate`, `upstream_error`, `transport_error`. Discovery's: `search_unavailable`, `search_failed`. Anything unforeseen becomes `internal_error`.
+
+`network_not_supported` and `scheme_not_supported` are separate on purpose. The x402 client raises one message for both, so this server reads the 402's own `accepts` list to see which it really was — an endpoint charging in `upto` on a network we do support is a scheme problem, and saying otherwise would send the agent looking in the wrong place.
 
 When the failure came from the facilitator or the resource server, its own `invalidReason` or `errorReason` appears in `details` word for word. Our code says which stage failed; theirs says why.
 
@@ -142,4 +144,8 @@ The descriptions explain parameters and the payment protocol and nothing else �
 
 ## Not built
 
-An MCP tool that is itself paid, which `@x402/mcp` supports, needs an x402-aware MCP client. Claude Desktop and Claude Code are not, so only our own code could pay such a tool. `upto` payments need the resource server to offer that scheme. A signer in a separate process — so the process the model talks to could not sign at all — is the shape to reach for in production; here the key sits in the same process.
+An MCP tool that is itself paid, which `@x402/mcp` supports, needs an x402-aware MCP client. Claude Desktop and Claude Code are not, so only our own code could pay such a tool.
+
+Paying in `upto`. The facilitator serves that scheme when `UPTO_CONTRACT_ID` is set, but this wallet registers only the `exact` client scheme, because an upto payment means signing a ceiling against the settlement contract rather than an exact transfer. Endpoints priced that way show up in search marked `payable: false` and `paid_request` refuses them with `scheme_not_supported` rather than failing halfway.
+
+A signer in a separate process — so the process the model talks to could not sign at all — is the shape to reach for in production; here the key sits in the same process.

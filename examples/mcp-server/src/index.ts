@@ -8,10 +8,13 @@ import { SessionBudget } from "./budget.js";
 import { logger } from "./logger.js";
 import { createPayer } from "./payer.js";
 import { createMcpServer } from "./server.js";
+import { PaymentAbility, SIGNABLE_SCHEMES } from "./ability.js";
 
 async function main(): Promise<void> {
-  const assets = Env.assets;
   const network = Env.stellarNetwork;
+  // One object answers "can this be paid" for both tools, so search cannot
+  // offer something payment would refuse.
+  const ability = new PaymentAbility(Env.assets, SIGNABLE_SCHEMES);
   const budget = new SessionBudget(Env.maxPayment, Env.sessionBudget);
 
   // Built once: the key is read at startup so a missing or malformed secret
@@ -20,7 +23,7 @@ async function main(): Promise<void> {
 
   const pay = createPayer({
     network,
-    assets,
+    ability,
     budget,
     // A fresh scheme client per call, so the per-call hooks that enforce the
     // budget cannot be crossed by two tool calls running at once.
@@ -31,7 +34,7 @@ async function main(): Promise<void> {
 
   const server = createMcpServer({
     facilitatorUrl: Env.facilitatorUrl,
-    assets,
+    ability,
     fetchImpl: globalThis.fetch,
     pay,
   });
@@ -40,7 +43,7 @@ async function main(): Promise<void> {
     {
       facilitator: Env.facilitatorUrl,
       network,
-      payable: assets.list().map((asset) => asset.symbol),
+      payable: ability.describe(),
       budget: budget.report(),
     },
     "x402 Bazaar MCP server ready on stdio",

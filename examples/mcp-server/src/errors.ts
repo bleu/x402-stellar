@@ -12,6 +12,7 @@ export const TOOL_ERROR_CODES = [
   "session_budget_exhausted",
   "asset_not_allowed",
   "network_not_supported",
+  "scheme_not_supported",
   "invalid_url",
   "forbidden_header",
   "no_acceptable_payment_option",

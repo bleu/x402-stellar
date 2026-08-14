@@ -117,7 +117,51 @@ describe("search_bazaar", () => {
     expect(first.payable).toBe(false);
     expect(first.price).toMatchObject({ asset: XLM });
     expect(first.price).not.toHaveProperty("usd");
-    expect((body.notes as string[])[0]).toContain("cannot pay");
+    expect((body.notes as string[])[0]).toContain("cannot be paid by this wallet");
+  });
+
+  it("marks a scheme it cannot sign as unpayable, allowlisted asset or not", async () => {
+    // Search and payment have to answer this identically. An upto-priced row in
+    // an asset we hold is still something paid_request will refuse, so calling it
+    // payable would send the agent at an endpoint it cannot buy.
+    const uptoOnly = resource({
+      accepts: [
+        { scheme: "upto", network: NETWORK, asset: TESTNET_USDC, amount: "10000", payTo: "G..." },
+      ],
+    });
+    const client = await connect({
+      fetchImpl: (async () => searchResponse([uptoOnly])) as unknown as typeof globalThis.fetch,
+    });
+
+    const body = resultBody(
+      await client.callTool({ name: "search_bazaar", arguments: { query: "thing" } }),
+    );
+    const [first] = body.results as Record<string, unknown>[];
+
+    expect(first.payable).toBe(false);
+    expect(first.price).toMatchObject({ scheme: "upto" });
+    // No USD figure either: it is not a price this wallet can act on.
+    expect(first.price).not.toHaveProperty("usd");
+  });
+
+  it("quotes the signable option when a resource offers two schemes", async () => {
+    const mixed = resource({
+      accepts: [
+        { scheme: "upto", network: NETWORK, asset: TESTNET_USDC, amount: "1", payTo: "G..." },
+        { scheme: "exact", network: NETWORK, asset: TESTNET_USDC, amount: "10000", payTo: "G..." },
+      ],
+    });
+    const client = await connect({
+      fetchImpl: (async () => searchResponse([mixed])) as unknown as typeof globalThis.fetch,
+    });
+
+    const body = resultBody(
+      await client.callTool({ name: "search_bazaar", arguments: { query: "thing" } }),
+    );
+    const [first] = body.results as Record<string, unknown>[];
+
+    expect(first.payable).toBe(true);
+    expect(first.price).toMatchObject({ scheme: "exact", amountAtomic: "10000" });
   });
 
   it("quotes the cheapest payable option when several are offered", async () => {
