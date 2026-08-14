@@ -62,7 +62,6 @@ async function main(): Promise<void> {
     rpcUrl,
     network,
     facilitatorAddress: Keypair.fromSecret(facilitatorSecret).publicKey(),
-    amount: actual,
   });
 
   const payload: PaymentPayload = {
@@ -83,8 +82,11 @@ async function main(): Promise<void> {
   console.log("  ", JSON.stringify(verify));
   if (!verify.isValid) throw new Error(`verify rejected: ${verify.invalidReason}`);
 
+  // What the resource server does through `setSettlementOverrides`: core
+  // rewrites `requirements.amount` for the settle call only, so the cap the
+  // buyer signed is untouched and only the charge comes down.
   console.log(`settle ${actual} of cap ${cap}...`);
-  const settle = await scheme.settle(payload, requirements);
+  const settle = await scheme.settle(payload, { ...requirements, amount: actual.toString() });
   console.log("  ", JSON.stringify(settle));
   if (!settle.success) throw new Error(`settle failed: ${settle.errorReason}`);
 

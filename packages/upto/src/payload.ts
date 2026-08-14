@@ -29,13 +29,13 @@ export interface UptoAuthorization {
  * The `upto` payment payload carried in `PaymentPayload.payload`. The buyer
  * builds it: the signed authorization plus a base64 `SorobanAuthorizationEntry`
  * that authorizes the settle call (amount excluded) and the nested `approve`.
- * `amount`, when present, is the actual amount the facilitator should settle;
- * it is not part of what the buyer signed.
+ *
+ * The settled amount is not here. The seller picks it after serving the
+ * request, and it reaches the facilitator as a reduced `requirements.amount`.
  */
 export interface UptoStellarPayload {
   authorization: UptoAuthorization;
   authEntryXdr: string;
-  amount?: string;
 }
 
 const SALT_HEX = /^[0-9a-fA-F]{64}$/;
@@ -53,10 +53,6 @@ export function parseUptoPayload(
   if (typeof p.authEntryXdr !== "string" || p.authEntryXdr.length === 0) {
     return { error: "payload.authEntryXdr must be a non-empty base64 string" };
   }
-  if (p.amount !== undefined && !isAtomicAmount(p.amount)) {
-    return { error: "payload.amount must be a non-negative integer string" };
-  }
-
   const a = p.authorization as Record<string, unknown> | undefined;
   if (typeof a !== "object" || a === null)
     return { error: "payload.authorization must be an object" };

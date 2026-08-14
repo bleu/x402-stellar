@@ -21,8 +21,6 @@ export interface BuildUptoPayloadParams {
   facilitatorAddress: string;
   /** Ledgers from now until the buyer's authorization expires (default ~24h). */
   validityWindowLedgers?: number;
-  /** Optional actual amount to request; defaults to the cap. */
-  amount?: bigint;
 }
 
 /**
@@ -81,9 +79,5 @@ export async function buildUptoPayload(
 
   const signed = await authorizeEntry(buyerEntries[0], buyer, authValidUntil, passphrase);
 
-  return {
-    authorization: auth,
-    authEntryXdr: signed.toXDR("base64"),
-    ...(params.amount === undefined ? {} : { amount: params.amount.toString() }),
-  };
+  return { authorization: auth, authEntryXdr: signed.toXDR("base64") };
 }

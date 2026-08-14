@@ -67,8 +67,17 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     this.logger = options.logger ?? SILENT;
   }
 
+  /**
+   * What a buyer needs to build a payload without being told out of band: the
+   * settlement contract and the account that submits the settle, which the
+   * buyer must simulate against so its authorization stays detached.
+   */
   getExtra(): Record<string, unknown> | undefined {
-    return { areFeesSponsored: this.areFeesSponsored, contract: this.contractId };
+    return {
+      areFeesSponsored: this.areFeesSponsored,
+      contract: this.contractId,
+      settler: this.facilitator.publicKey(),
+    };
   }
 
   getSigners(): string[] {
@@ -88,10 +97,13 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     const mismatch = this.checkRequirements(payload, auth, requirements);
     if (mismatch) return mismatch;
 
-    const amount = this.resolveAmount(parsed.payload);
-    if (amount === undefined) {
-      return invalid("amount_exceeds_max", "settle amount exceeds the signed maxAmount");
+    // Verify runs before the handler, so `requirements.amount` is still the
+    // quoted cap. Holding it to the signed maxAmount is what stops a seller
+    // from quoting one ceiling and collecting a signature for another.
+    if (auth.maxAmount !== requirements.amount) {
+      return invalid("cap_mismatch", "authorization maxAmount does not match requirements amount");
     }
+    const amount = BigInt(auth.maxAmount);
 
     const window = await this.checkWindow(auth);
     if (window) return window;
@@ -133,9 +145,12 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
       );
     }
 
-    const amount = this.resolveAmount(parsed.payload);
+    const amount = settleAmount(auth, requirements);
     if (amount === undefined) {
-      return this.settleFailure("amount_exceeds_max", "settle amount exceeds the signed maxAmount");
+      return this.settleFailure(
+        "amount_exceeds_max",
+        `settle amount ${requirements.amount} is not within 0..${auth.maxAmount}`,
+      );
     }
 
     const window = await this.checkWindow(auth);
@@ -224,9 +239,6 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     if (auth.payTo !== requirements.payTo) {
       return invalid("recipient_mismatch", "authorization payTo does not match requirements");
     }
-    if (auth.maxAmount !== requirements.amount) {
-      return invalid("cap_mismatch", "authorization maxAmount does not match requirements amount");
-    }
     return undefined;
   }
 
@@ -239,17 +251,6 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
       return invalid("expired", `ledger ${sequence} > deadline ${auth.deadlineLedger}`);
     }
     return undefined;
-  }
-
-  /** Actual settle amount, defaulting to the cap; undefined when it exceeds the cap. */
-  private resolveAmount(payload: {
-    authorization: UptoAuthorization;
-    amount?: string;
-  }): bigint | undefined {
-    const cap = BigInt(payload.authorization.maxAmount);
-    const amount = payload.amount === undefined ? cap : BigInt(payload.amount);
-    if (amount < 0n || amount > cap) return undefined;
-    return amount;
   }
 
   private settleFailure(reason: string, message?: string): SettleResponse {
@@ -266,4 +267,21 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
 
 function invalid(reason: string, message: string): VerifyResponse {
   return { isValid: false, invalidReason: reason, invalidMessage: message };
+}
+
+/**
+ * What settle may charge: the amount the seller asked for, which core has
+ * already rewritten into `requirements.amount` from its settlement override.
+ * Undefined when it is outside `0..maxAmount`.
+ *
+ * Core does not clamp an override, so this check and the contract are the only
+ * things standing between a seller's typo and the buyer's whole ceiling.
+ */
+function settleAmount(
+  auth: UptoAuthorization,
+  requirements: PaymentRequirements,
+): bigint | undefined {
+  if (!/^\d+$/.test(requirements.amount)) return undefined;
+  const amount = BigInt(requirements.amount);
+  return amount > BigInt(auth.maxAmount) ? undefined : amount;
 }
