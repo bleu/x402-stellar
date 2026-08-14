@@ -1,6 +1,8 @@
 # Architecture
 
-This repository holds an x402 facilitator for Stellar, a Bazaar catalog, a paid demo endpoint, and two clients. This document shows the components, the flows between them, and the data they keep.
+This repository holds an x402 facilitator for Stellar, a Bazaar catalog, a paid demo endpoint, and two clients. This document shows the components and the flows between them.
+
+Each README holds the details of one part: its endpoints, its environment variables, and its data.
 
 The x402 protocol is unchanged here. All protocol logic comes from the `@x402/*` packages. This code adds the service shell, the catalog, and the clients.
 
@@ -192,90 +194,3 @@ Guards inside `paid_request`:
 - Payment headers from the caller are refused.
 
 Every refusal returns a code from a closed set and a reason that is never empty.
-
-## Data
-
-```mermaid
-erDiagram
-    catalog_resources {
-        text resource PK
-        text tool_name PK
-        text type
-        text method
-        text route_template
-        jsonb accepts
-        jsonb extensions
-        text search_document
-        tsvector search_tsv
-        vector embedding
-        text source
-        timestamptz last_updated
-    }
-    catalog_settlements {
-        bigserial id PK
-        text resource FK
-        text tool_name FK
-        text asset
-        text payer
-        timestamptz settled_at
-    }
-    asset_usd_prices {
-        text asset PK
-        text coingecko_id
-        numeric usd_price
-        timestamptz fetched_at
-    }
-    catalog_resources ||--o{ catalog_settlements : "usage"
-```
-
-`asset_usd_prices` has no foreign key. Search joins it to the assets inside the `accepts` array at query time.
-
-- `catalog_resources` holds one row for each endpoint, or for each MCP tool on an endpoint. `search_tsv` is generated from `search_document`. `embedding` has 384 numbers. Indexes: GIN on `search_tsv`, HNSW on `embedding`.
-- `catalog_settlements` is append-only. A `GROUP BY` gives the `quality` numbers: calls, unique payers, and last call time. Payer addresses are public chain data.
-- `asset_usd_prices` keeps the rates for `maxUsdPrice`. USD stablecoins use an assumed rate of 1.00, so the filter works without an API key. Other assets need CoinGecko, polled every 15 minutes. A rate older than one hour is not used.
-
-## Configuration
-
-The facilitator is one process with optional parts:
-
-```mermaid
-graph LR
-    E1["FACILITATOR_STELLAR_PRIVATE_KEY"] --> P["facilitator process"]
-    E2["DATABASE_URL"] -->|"enables"| C["catalog + search"]
-    E3["COINGECKO_API_KEY"] -->|"enables"| PR["live rates"]
-    E4["UPTO_CONTRACT_ID"] -->|"enables"| UP["upto scheme"]
-    E5["FACILITATOR_STELLAR_CHANNEL_SECRETS"] -->|"enables"| CH["parallel settlement"]
-```
-
-Without `DATABASE_URL` the facilitator is stateless. Without `UPTO_CONTRACT_ID` it serves `exact` only. Channel accounts and a fee-bump signer give higher throughput, because each channel account keeps its own sequence number.
-
-## Trust boundaries
-
-```mermaid
-graph TB
-    subgraph buyer["Buyer machine"]
-        K["Buyer key"]
-        MC["MCP server or CLI"]
-    end
-    subgraph facil["Facilitator host"]
-        FK["Facilitator key"]
-        FP["facilitator process"]
-    end
-    K --- MC
-    MC -->|"signed authorization<br/>fixed amount, asset, recipient"| FP
-    FK --- FP
-    FP -->|"fee payment + submission"| CHAIN["Stellar"]
-```
-
-- The buyer key stays on the buyer machine. The facilitator gets a signed authorization for one transfer.
-- The facilitator key pays fees and submits transactions. It cannot change the amount or the recipient of an `exact` payment.
-- For `upto`, the contract limits the facilitator. Without the contract, the facilitator could take the full cap.
-- Catalog text comes from sellers. An agent reads it. Spending caps limit the damage of hostile text.
-
-## What is not built
-
-- No deployment. All parts run on localhost.
-- No crawler for 402 responses, so `accepts` stays settlement-observed.
-- No paid MCP tool. That needs an x402-aware MCP client.
-- No asynchronous embedding. The embedding runs in the settle path.
-- No usage in the ranking.
