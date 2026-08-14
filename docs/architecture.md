@@ -34,6 +34,8 @@ graph TB
     MCP -->|"HTTP + payment"| PW
     CLI -->|"HTTP + payment"| PW
     PW -->|"verify, settle"| FM
+    MCP -.->|"signs a ceiling"| UP2["packages/upto"]
+    PW -.->|"prices a ceiling"| UP2
     FM -->|"after settle"| CM
     FM -->|"submit"| SOR
     FM -.->|"upto scheme only"| UC
@@ -55,8 +57,11 @@ Each part has one job:
 | UptoSettlement     | Enforces the cap of an `upto` payment on-chain.                        |
 | packages/shared    | Shared helpers for x402 headers.                                       |
 | packages/paywall   | Browser paywall UI for the demo client.                                |
+| packages/upto      | The `upto` scheme: payload, buyer, resource server, facilitator.       |
 
 Default ports: facilitator `4022`, resource server `3001`, Postgres `5442`.
+
+`packages/upto` has one subpath per role, so each side imports only what it needs: `./client` builds and signs the ceiling, `./server` prices a route and publishes the settlement addresses, `./facilitator` verifies and settles, and the root holds the payload types both ends share. It keeps `@stellar/stellar-sdk` out of `packages/shared`, which is dependency-free and feeds the browser paywall bundle.
 
 ## Flow 1: an exact payment
 
@@ -93,24 +98,48 @@ Three rules hold in this flow:
 
 The `upto` scheme lets the seller charge less than a signed ceiling. Stellar auth entries authorize an exact transfer, so a contract must hold the ceiling. The facilitator serves this scheme only when `UPTO_CONTRACT_ID` is set.
 
+The buyer never picks the amount. It signs a ceiling; the seller decides what to charge once it knows whether it could answer.
+
 ```mermaid
 sequenceDiagram
     participant C as Client
+    participant S as Resource server
     participant F as Facilitator
     participant U as UptoSettlement
     participant T as Token
 
+    C->>S: GET the ceiling-priced route
+    S-->>C: 402, accepts[].extra names the<br/>contract and the settler
     Note over C: Buyer signs settle(cap, payTo,<br/>deadline, salt).<br/>The amount stays unsigned.
-    C->>F: PaymentPayload with the signed entry
+    C->>S: Retry with the signed entry
+    S->>F: /verify
+    F->>F: requirements.amount == signed cap?
+    S->>S: Handler answers, then picks<br/>the amount to charge
+    S->>F: /settle with the reduced amount
+    F->>F: 0 <= amount <= signed cap?
     F->>U: settle(actual amount)
     U->>U: Check amount <= cap
     U->>U: Check payTo, deadline, salt
     U->>T: transfer(buyer -> payTo, actual)
     T-->>U: ok
     U-->>F: settled
+    F-->>S: settled, with the amount
+    S-->>C: 200 + data + settlement
 ```
 
 The contract checks four things: the amount is not above the cap, the recipient matches, the deadline is not passed, and the salt is unused. The buyer signs one time for both steps.
+
+Points to know:
+
+- Verify runs before the handler, so it still sees the quoted cap. Holding that to the signed ceiling is what stops a seller quoting one number and collecting a signature for another.
+- The seller sets the amount with `setSettlementOverrides` from `@x402/express`. Core rewrites `requirements.amount` for the settle call only.
+- Core does not clamp an override. A number above the cap is caught by the facilitator's range check and by the contract, and nowhere else.
+- A 4xx from the handler cancels the payment and drops the override, so a request the seller could not answer costs the buyer nothing.
+- The buyer simulates against the settler account, not itself. As its own source, the authorization would collapse into a source-account credential and leave nothing detached to sign offline.
+
+What the contract stops the facilitator doing: exceeding the cap, sending funds anywhere but the bound `payTo`, changing the asset, settling outside the ledger window, or replaying the entry, because Soroban consumes the auth nonce.
+
+What it does not stop: charging the full cap whatever the seller asked for. The amount sits outside `require_auth_for_args` on purpose, which is what makes a partial settle possible at all. The cap is the buyer's protection, so keep caps small and choose facilitators you trust.
 
 ## Flow 3: how a resource enters the catalog
 
@@ -188,9 +217,12 @@ The agent learns the parameter names from `extensions.bazaar.info.input` in the 
 Guards inside `paid_request`:
 
 - An asset allowlist. Only listed assets can be signed for.
-- Only the `exact` scheme. An `upto` price is refused.
+- The `exact` and `upto` schemes. Anything else is refused.
 - A per-call cap and a session budget.
 - The budget is charged when the payment is signed. A lost answer can still be a spent payment.
+- With `upto` the charge is the ceiling, because that is all the signature bounds. It comes down to the settled amount when the answer says it succeeded and names that amount. A failure, a timeout, or a missing amount keeps the ceiling charged.
 - Payment headers from the caller are refused.
+
+The agent chooses between schemes. Search prices an `upto` row at its ceiling, so a `maxUsdPrice` filter compares against the most the call could cost, and `paid_request` reports the ceiling and the charge side by side when they differ.
 
 Every refusal returns a code from a closed set and a reason that is never empty.

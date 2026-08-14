@@ -4,7 +4,7 @@ Express service that verifies and settles [x402](https://www.x402.org/) payments
 
 The service is one process composed of three modules under `src/modules/`:
 
-- **facilitator** — the x402 protocol endpoints (`/verify`, `/settle`, `/supported`), a thin shell over `@x402/stellar`'s `ExactStellarScheme`, which owns all payload validation and settlement machinery. When `UPTO_CONTRACT_ID` is set, it also registers `UptoStellarScheme` (in `src/modules/facilitator/upto/`), which serves the `upto` scheme — partial settlement up to a buyer-signed cap — through the `UptoSettlement` contract in `contracts/`. `scripts/upto-e2e.ts` drives one verify-then-settle through it on testnet.
+- **facilitator** — the x402 protocol endpoints (`/verify`, `/settle`, `/supported`), a thin shell over `@x402/stellar`'s `ExactStellarScheme`, which owns all payload validation and settlement machinery. When `UPTO_CONTRACT_ID` is set, it also registers `UptoStellarScheme` from `@x402-stellar/upto/facilitator`, which serves the `upto` scheme — partial settlement up to a buyer-signed cap — through the `UptoSettlement` contract in `contracts/`. `scripts/upto-e2e.ts` drives one verify-then-settle through it on testnet.
 - **catalog** — optional resource discovery backed by Postgres with pgvector. When `DATABASE_URL` is set, resources seen in successful settlements are recorded (via the facilitator's after-settle hook) and served at `GET /discovery/resources` and `GET /discovery/search` in the [x402 Bazaar](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md) shapes. Without `DATABASE_URL` the module is disabled and the facilitator runs fully stateless.
 - **prices** — optional USD rates for the `maxUsdPrice` search filter, polled from CoinGecko.
 
@@ -20,6 +20,21 @@ The service is one process composed of three modules under `src/modules/`:
 | GET    | `/health`              | Health check                                    |
 
 Both `/discovery` endpoints are deliberately public so Bazaar clients can browse without an API key; they are still rate-limited.
+
+## The upto scheme
+
+Set `UPTO_CONTRACT_ID` and the facilitator serves a second scheme, where the buyer signs a ceiling and the seller charges at or below it.
+
+Verify and settle answer different questions, which is the whole of it:
+
+- **Verify** runs before the handler, so `requirements.amount` is still the quoted ceiling. It asserts that ceiling equals the `maxAmount` the buyer signed. That is what stops a seller quoting one number and collecting a signature for another.
+- **Settle** runs after, with the amount the seller chose already written into `requirements.amount`. It accepts anything from zero up to the signed ceiling, settles that number, and returns it in the settle response.
+
+`/supported` advertises two addresses in `extra` for this scheme: `contract`, the `UptoSettlement` instance, and `settler`, the account that submits the settle. A buyer needs both to build its authorization, and gets them from the 402 rather than from anything agreed out of band. The buyer must simulate against `settler`; simulating as itself collapses the authorization into a source-account credential and leaves nothing detached to sign offline.
+
+Core does not clamp a settlement override — `resolveSettlementOverrideAmount` passes a raw number straight through — so the range check in settle and the contract are the only guards against a seller asking for more than the ceiling.
+
+A resource server priced this way registers `UptoStellarServerScheme` from `@x402-stellar/upto/server` and sets the amount with `setSettlementOverrides` from `@x402/express`. `examples/simple-paywall` does exactly that on `GET /weather-upto/:network`: it quotes a 0.003 ceiling, then charges the whole ceiling for a short premium city list and a third of it for anything else. A 4xx from that handler cancels the payment and drops the override, so a city it could not resolve costs the buyer nothing.
 
 ## Cataloging
 
