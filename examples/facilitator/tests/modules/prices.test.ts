@@ -64,6 +64,8 @@ describe("price feed", () => {
   });
 
   it("reports no price for an asset it has no mapping for", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+
     const feed = createPriceFeed({ store, apiKey: "key" });
     await feed.refresh();
 
