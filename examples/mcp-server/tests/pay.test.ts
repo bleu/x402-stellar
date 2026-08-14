@@ -195,21 +195,21 @@ describe("paid_request", () => {
   });
 
   it("tells an unsignable scheme apart from an unknown network", async () => {
-    // The facilitator serves upto; this wallet registers no client scheme for it.
-    // Both cases reach us as one message from the client, so the 402 we recorded
-    // is what makes the distinction, and the agent must not be told the network
-    // was wrong when the network was fine.
-    const { pay } = harness([paymentRequired([requirements({ scheme: "upto" })])]);
+    // This wallet registers no client scheme for `subscription`. An unknown
+    // scheme and an unknown network reach us as one message from the client, so
+    // the 402 we recorded is what makes the distinction, and the agent must not
+    // be told the network was wrong when the network was fine.
+    const { pay } = harness([paymentRequired([requirements({ scheme: "subscription" })])]);
 
     await expect(pay({ url: RESOURCE })).rejects.toMatchObject({
       code: "scheme_not_supported",
-      details: { offered: [`upto on ${NETWORK}`] },
+      details: { offered: [`subscription on ${NETWORK}`] },
     });
   });
 
   it("refuses an unsignable scheme even when the asset is allowlisted", async () => {
     const { pay, budget } = harness([
-      paymentRequired([requirements({ scheme: "upto", asset: TESTNET_USDC })]),
+      paymentRequired([requirements({ scheme: "subscription", asset: TESTNET_USDC })]),
     ]);
 
     await expect(pay({ url: RESOURCE })).rejects.toMatchObject({
@@ -220,7 +220,7 @@ describe("paid_request", () => {
 
   it("picks the signable scheme when the resource offers both", async () => {
     const { pay } = harness([
-      paymentRequired([requirements({ scheme: "upto", amount: "1" }), requirements()]),
+      paymentRequired([requirements({ scheme: "subscription", amount: "1" }), requirements()]),
       settled(),
     ]);
 

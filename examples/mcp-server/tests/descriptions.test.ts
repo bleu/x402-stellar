@@ -41,6 +41,15 @@ describe("tool descriptions", () => {
     expect(payDescription()).toContain("402");
   });
 
+  it("explain a ceiling price, since a row's price may be more than it charges", () => {
+    // The row carries scheme: "upto" and nothing else marks it, so the only
+    // place an agent can learn what that price means is here.
+    const search = searchDescription(ability).toLowerCase();
+
+    expect(search).toContain("upto");
+    expect(search).toContain("ceiling");
+  });
+
   it("reach the client verbatim", async () => {
     const client = await connect();
     const { tools } = await client.listTools();

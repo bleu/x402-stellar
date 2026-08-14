@@ -11,12 +11,16 @@ export interface BudgetReport {
 /**
  * The session's spending ceiling, held in memory for the life of the process.
  *
- * Spend is committed the moment a payment is signed and is never given back.
- * A payment we signed and sent may settle even if we never see the answer --
- * @x402/core says as much about a settle timeout -- so releasing on a failure we
- * cannot distinguish from a slow success would let the agent spend past the
- * ceiling while every individual check passed. Overcounting a genuinely failed
- * payment costs one call's worth of allowance; undercounting costs real money.
+ * Spend is committed the moment a payment is signed. With `upto` what gets
+ * signed is a ceiling, and the seller picks the real amount afterwards, so the
+ * ceiling is what the allowance has to assume until something better is known.
+ *
+ * It is given back only on certainty. A payment we signed and sent may settle
+ * even if we never see the answer -- @x402/core says as much about a settle
+ * timeout -- so releasing on a failure we cannot distinguish from a slow
+ * success would let the agent spend past the ceiling while every individual
+ * check passed. Overcounting a genuinely failed payment costs one call's worth
+ * of allowance; undercounting costs real money.
  */
 export class SessionBudget {
   #spent = 0n;
@@ -57,6 +61,25 @@ export class SessionBudget {
   /** Called once a payment has been signed, so the allowance is consumed. */
   commit(amount: bigint): void {
     this.#spent += amount;
+  }
+
+  /**
+   * Reduces a committed charge to what actually settled, and answers how much
+   * came back. Call it only for a settlement that definitely happened and
+   * definitely named its amount: an outcome we cannot read keeps the ceiling.
+   *
+   * @param committed - what `commit` was called with for this payment
+   * @param settled - what the facilitator reported settling
+   */
+  reconcile(committed: bigint, settled: bigint): bigint {
+    if (settled >= committed) return 0n;
+
+    const released = committed - settled;
+    // Clamped because a caller could hand us a committed figure larger than
+    // anything this session ever charged, and a negative spend would hand the
+    // agent free allowance.
+    this.#spent = this.#spent > released ? this.#spent - released : 0n;
+    return released;
   }
 
   report(): BudgetReport {
