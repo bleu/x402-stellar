@@ -4,7 +4,7 @@ import { Router, type Request } from "express";
 
 import { logger } from "../../utils/logger.js";
 import { CatalogStore, type CatalogFilters, type CatalogResource } from "./store.js";
-import { toCatalogRecord, toResourceKey } from "./record.js";
+import { quotedRequirements, toCatalogRecord, toResourceKey } from "./record.js";
 
 export interface CatalogModule {
   router: Router;
@@ -223,7 +223,11 @@ export function createCatalogModule(store: CatalogStore, prices?: UsdPrices): Ca
         const discovered = extractDiscoveryInfo(context.paymentPayload, context.requirements);
         if (!discovered) return;
 
-        await store.upsertWithSettlement(toCatalogRecord(discovered, context.requirements), {
+        // The quoted price, not the charge: a partial settle has already
+        // rewritten context.requirements.amount down to what it took.
+        const quoted = quotedRequirements(context.paymentPayload, context.requirements);
+
+        await store.upsertWithSettlement(toCatalogRecord(discovered, quoted), {
           ...toResourceKey(discovered),
           asset: context.requirements.asset,
           payer: context.result.payer,

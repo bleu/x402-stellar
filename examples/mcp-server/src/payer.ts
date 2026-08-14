@@ -5,7 +5,13 @@ import { FacilitatorTimeoutError, SettleError, VerifyError } from "@x402/core/ty
 import { wrapFetchWithPayment } from "@x402/fetch";
 
 import type { PaymentAbility } from "./ability.js";
-import { fromAtomic, parseAtomicAmount, toBudgetUnits, type PayableAsset } from "./assets.js";
+import {
+  BUDGET_DECIMALS,
+  fromAtomic,
+  parseAtomicAmount,
+  toBudgetUnits,
+  type PayableAsset,
+} from "./assets.js";
 import type { BudgetReport, SessionBudget } from "./budget.js";
 import { ToolError, type ToolErrorCode } from "./errors.js";
 import { logger } from "./logger.js";
@@ -50,6 +56,13 @@ export interface PaidRequestOutput {
     amountAtomic?: string;
     asset?: string;
     usd?: string;
+    /**
+     * What the signature authorized, when it is more than what settled. Absent
+     * for `exact`, and for an `upto` that took its whole ceiling, because there
+     * the two are the same number.
+     */
+    reservedAtomic?: string;
+    reservedUsd?: string;
   };
   budget: BudgetReport;
 }
@@ -58,8 +71,8 @@ export interface PayerConfig {
   network: `${string}:${string}`;
   ability: PaymentAbility;
   budget: SessionBudget;
-  /** Builds the scheme client that signs. Injected so tests need no key. */
-  createSchemeClient: () => SchemeNetworkClient;
+  /** Builds the scheme clients that sign. Injected so tests need no key. */
+  createSchemeClients: () => SchemeNetworkClient[];
   fetchImpl: typeof globalThis.fetch;
   explorerBaseUrl?: string;
 }
@@ -248,8 +261,9 @@ export function createPayer(config: PayerConfig) {
       return response;
     };
 
-    const client = new x402Client()
-      .register(config.network, config.createSchemeClient())
+    const client = config
+      .createSchemeClients()
+      .reduce((c, scheme) => c.register(config.network, scheme), new x402Client())
       .registerPolicy((_version, requirements) => {
         // Only reached with a non-empty list: the client throws on its own when
         // no option matches a registered network and scheme.
@@ -340,6 +354,35 @@ export function createPayer(config: PayerConfig) {
     const settlement = readSettlement(response);
     const { body, truncated } = await readBody(response);
 
+    // Reserve-then-reconcile. The budget was charged the ceiling at signing,
+    // because that is all the signature bounds. Only a settlement that says it
+    // succeeded and says what it took is certain enough to reduce that charge:
+    // a failure, a timeout or a missing amount all keep the ceiling.
+    const reserved = context.signed?.amountAtomic;
+    let settledAtomic: bigint | undefined;
+    if (context.signed && settlement?.success === true && settlement.amount !== undefined) {
+      try {
+        settledAtomic = parseAtomicAmount(settlement.amount);
+      } catch (error) {
+        logger.warn({ err: error, amount: settlement.amount }, "Unreadable settled amount");
+      }
+    }
+    if (context.signed && settledAtomic !== undefined) {
+      const decimals = context.signed.asset.decimals;
+      const released = config.budget.reconcile(
+        toBudgetUnits(context.signed.amountAtomic, decimals),
+        toBudgetUnits(settledAtomic, decimals),
+      );
+      logger.info(
+        {
+          reserved: fromAtomic(context.signed.amountAtomic, decimals),
+          settled: fromAtomic(settledAtomic, decimals),
+          released: fromAtomic(released, BUDGET_DECIMALS),
+        },
+        "Reconciled a ceiling payment",
+      );
+    }
+
     if (!response.ok) {
       // A second 402 means the payment was rejected at verify time.
       const code: ToolErrorCode = response.status === 402 ? "verify_failed" : "upstream_error";
@@ -390,9 +433,20 @@ export function createPayer(config: PayerConfig) {
                 : {}),
               ...(context.signed
                 ? {
-                    amountAtomic: context.signed.amountAtomic.toString(),
+                    amountAtomic: (settledAtomic ?? context.signed.amountAtomic).toString(),
                     asset: context.signed.asset.asset,
-                    usd: fromAtomic(context.signed.amountAtomic, context.signed.asset.decimals),
+                    usd: fromAtomic(
+                      settledAtomic ?? context.signed.amountAtomic,
+                      context.signed.asset.decimals,
+                    ),
+                    ...(reserved !== undefined &&
+                    settledAtomic !== undefined &&
+                    settledAtomic !== reserved
+                      ? {
+                          reservedAtomic: reserved.toString(),
+                          reservedUsd: fromAtomic(reserved, context.signed.asset.decimals),
+                        }
+                      : {}),
                   }
                 : {}),
             },

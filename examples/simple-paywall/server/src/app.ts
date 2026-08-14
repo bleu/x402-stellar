@@ -4,7 +4,11 @@ import helmet from "helmet";
 import proxyAddr from "proxy-addr";
 import { Env, NETWORK_META } from "./config/env.js";
 import { logger, httpLogger } from "./utils/logger.js";
-import { createPaymentMiddlewares, createApiPaymentMiddlewares } from "./middleware/payment.js";
+import {
+  createPaymentMiddlewares,
+  createApiPaymentMiddlewares,
+  createUptoApiPaymentMiddlewares,
+} from "./middleware/payment.js";
 import { paymentLogger } from "./middleware/paymentLogger.js";
 import { txHashInjector } from "./middleware/txHashInjector.js";
 import { healthRouter } from "./routes/health.js";
@@ -60,7 +64,9 @@ export function createApp(): Express {
       "Weather forecast API — pay-per-request with x402 on Stellar. " +
       `Each ${prefix}/weather/<network> endpoint accepts payment on the corresponding Stellar network ` +
       `(e.g. ${prefix}/weather/testnet for Stellar testnet, ${prefix}/weather/mainnet for Stellar mainnet). ` +
-      `Pass the city name as a required query parameter: GET ${prefix}/weather/<network>?city=<name>.`;
+      `Pass the city name as a required query parameter: GET ${prefix}/weather/<network>?city=<name>. ` +
+      `Each ${prefix}/weather-upto/<network> endpoint serves the same forecast priced with a ceiling: ` +
+      "the buyer signs a cap and the endpoint charges at or below it, depending on the city.";
 
     if (Env.paywallDisabled) {
       res.json({ version: 1, resources: [], description });
@@ -72,6 +78,7 @@ export function createApp(): Express {
     for (const netConfig of Env.networksConfig) {
       const { routeSuffix } = NETWORK_META[netConfig.network];
       resources.push(`GET ${prefix}/weather/${routeSuffix}`);
+      resources.push(`GET ${prefix}/weather-upto/${routeSuffix}`);
     }
 
     res.json({ version: 1, resources, description });
@@ -133,6 +140,16 @@ export function createApp(): Express {
       logger.info(
         { route: `GET ${mw.routePath}`, network: mw.network },
         "Registered API payment route",
+      );
+    }
+
+    // Ceiling-priced API middlewares. Registered separately so a facilitator
+    // that does not serve upto breaks this route and nothing else.
+    for (const mw of createUptoApiPaymentMiddlewares()) {
+      app.use(mw.handler);
+      logger.info(
+        { route: `GET ${mw.routePath}`, network: mw.network },
+        "Registered upto API payment route",
       );
     }
   }

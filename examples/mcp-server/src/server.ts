@@ -19,6 +19,8 @@ function searchDescription(ability: PaymentAbility): string {
     "The Bazaar is a catalog of endpoints that charge per call. Each result carries its price,",
     "the parameters it accepts and an example call, so an endpoint can be used with no prior integration.",
     "Set maxUsdPrice, a number of US dollars, when the user states a spending limit.",
+    'A result whose price.scheme is "upto" quotes a ceiling: the endpoint decides what to charge',
+    "once it has served the request, and settles at or below that number, never above it.",
     `Results marked payable: false cannot be paid by this wallet, which holds ${ability.describe()};`,
     "they are still listed so the reason a request cannot be served is visible.",
   ].join(" ");

@@ -1,12 +1,11 @@
 import type { AssetAllowlist, PayableAsset } from "./assets.js";
 
 /**
- * Schemes this wallet can sign for. `exact` is the only client scheme it
- * registers; the facilitator also serves `upto`, but settling that needs a
- * client-side upto scheme and a contract-aware payload, which this server does
- * not build.
+ * Schemes this wallet can sign for, matching the client schemes it registers.
+ * With `upto` it signs a ceiling and the seller charges at or below it, so the
+ * price quoted for such a row is the most the call could cost.
  */
-export const SIGNABLE_SCHEMES: readonly string[] = ["exact"];
+export const SIGNABLE_SCHEMES: readonly string[] = ["exact", "upto"];
 
 /** One payment option as it appears in a 402 or in a catalog row's `accepts`. */
 export interface PaymentOptionLike {

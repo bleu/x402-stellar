@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@x402-stellar/upto": "workspace:*",
     "@x402/core": "^2.21.0",
     "@x402/extensions": "^2.21.0",
     "@x402/fetch": "^2.21.0",

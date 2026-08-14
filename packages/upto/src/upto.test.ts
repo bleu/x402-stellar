@@ -3,11 +3,12 @@ import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { describe, expect, it } from "vitest";
 
 import { parseUptoPayload, type UptoStellarPayload } from "./payload.js";
-import { UptoStellarScheme } from "./scheme.js";
+import { UptoStellarScheme } from "./facilitator/index.js";
 
 const ASSET = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
 const BUYER = "GCRXEB4BNIMRSNUZNAXQS2S7ZV236ZZEAENFYUOZLLTIQ3QMTNQZQ55Y";
 const MERCHANT = "GAZNKV4O7FDQX4FXXAQRSG4VMS6HGA72MI2YAGZOYP26BPZRPGZLGZZO";
+const CONTRACT = "CARIDBM7FJQHMHJVAWNAUG5IF5FXOLWBYGHLHMQBIX7MPN5BSPJHDR43";
 
 function validPayload(overrides: Partial<UptoStellarPayload> = {}): UptoStellarPayload {
   return {
@@ -41,17 +42,20 @@ function requirements(overrides: Partial<PaymentRequirements> = {}): PaymentRequ
 
 function scheme(): UptoStellarScheme {
   return new UptoStellarScheme({
-    contractId: "CARIDBM7FJQHMHJVAWNAUG5IF5FXOLWBYGHLHMQBIX7MPN5BSPJHDR43",
+    contractId: CONTRACT,
     facilitatorSecret: Keypair.random().secret(),
     rpcUrl: "https://soroban-testnet.stellar.org",
     network: "stellar:testnet",
   });
 }
 
-function payload(p: UptoStellarPayload): PaymentPayload {
+function payload(
+  p: UptoStellarPayload,
+  accepted: PaymentRequirements = requirements(),
+): PaymentPayload {
   return {
     x402Version: 2,
-    accepted: requirements(),
+    accepted,
     payload: p as unknown as Record<string, unknown>,
   };
 }
@@ -98,16 +102,49 @@ describe("UptoStellarScheme.verify pre-network checks", () => {
     expect(res).toMatchObject({ isValid: false, invalidReason: "cap_mismatch" });
   });
 
-  it("rejects an amount above the cap", async () => {
-    const res = await scheme().verify(payload(validPayload({ amount: "2000000" })), requirements());
-    expect(res).toMatchObject({ isValid: false, invalidReason: "amount_exceeds_max" });
-  });
-
   it("rejects an invalid payload shape", async () => {
     const res = await scheme().verify(
       { x402Version: 2, accepted: requirements(), payload: { nope: true } },
       requirements(),
     );
     expect(res).toMatchObject({ isValid: false, invalidReason: "invalid_payload" });
+  });
+});
+
+describe("UptoStellarScheme.getExtra", () => {
+  it("names the contract and the settler the buyer must build against", () => {
+    const facilitator = Keypair.random();
+    const extra = new UptoStellarScheme({
+      contractId: CONTRACT,
+      facilitatorSecret: facilitator.secret(),
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      network: "stellar:testnet",
+    }).getExtra();
+
+    expect(extra).toMatchObject({ contract: CONTRACT, settler: facilitator.publicKey() });
+  });
+});
+
+describe("UptoStellarScheme.settle pre-network checks", () => {
+  it("rejects an amount above the signed cap", async () => {
+    const res = await scheme().settle(payload(validPayload()), requirements({ amount: "2000000" }));
+    expect(res).toMatchObject({ success: false, errorReason: "amount_exceeds_max" });
+  });
+
+  it("rejects a settle amount that never resolved to atomic units", async () => {
+    const res = await scheme().settle(payload(validPayload()), requirements({ amount: "$0.003" }));
+    expect(res).toMatchObject({ success: false, errorReason: "amount_exceeds_max" });
+  });
+
+  it("rejects a quoted ceiling that is not the one the buyer signed", async () => {
+    // The settle call sees a reduced requirements.amount, so the only surviving
+    // record of what was quoted is payload.accepted. Anything downstream that
+    // reads it as the price -- the catalog does -- needs it pinned to the
+    // signature rather than taken on the client's word.
+    const res = await scheme().settle(
+      payload(validPayload(), requirements({ amount: "9999999" })),
+      requirements({ amount: "10000" }),
+    );
+    expect(res).toMatchObject({ success: false, errorReason: "cap_mismatch" });
   });
 });

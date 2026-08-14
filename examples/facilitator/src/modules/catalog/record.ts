@@ -1,7 +1,26 @@
 import type { DiscoveredResource } from "@x402/extensions/bazaar";
-import type { PaymentRequirements } from "@x402/core/types";
+import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 
 import type { CatalogRecord, ResourceKey } from "./store.js";
+
+/**
+ * What a future buyer would be quoted for this resource, which is not always
+ * what this one paid.
+ *
+ * A partial settle rewrites `requirements.amount` down to the charge before the
+ * settle call, so recording that would advertise the last charge as the price
+ * and leave a `maxUsdPrice` filter comparing against less than the call can
+ * cost. The quoted ceiling survives in `payload.accepted`, which the `upto`
+ * scheme pins to the buyer's signed maxAmount.
+ */
+export function quotedRequirements(
+  payload: PaymentPayload,
+  settled: PaymentRequirements,
+): PaymentRequirements {
+  const quoted = payload.accepted?.amount;
+  if (typeof quoted !== "string" || !/^\d+$/.test(quoted)) return settled;
+  return BigInt(quoted) > BigInt(settled.amount) ? { ...settled, amount: quoted } : settled;
+}
 
 /**
  * Turns the SDK's extraction result into a catalog row.

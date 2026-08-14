@@ -36,6 +36,7 @@ vi.mock("../../src/middleware/payment.js", () => ({
     return [makeMock("stellar:testnet", "testnet")];
   },
   createApiPaymentMiddlewares: () => [],
+  createUptoApiPaymentMiddlewares: () => [],
 }));
 
 vi.mock("../../src/utils/logger.js", () => {
@@ -96,13 +97,12 @@ describe("single-network deployment (testnet only)", () => {
 });
 
 describe("GET /.well-known/x402 (single-network)", () => {
-  it("lists only testnet weather route", async () => {
+  it("lists only testnet weather routes", async () => {
     const res = await request(app).get("/.well-known/x402");
 
     expect(res.status).toBe(200);
     expect(res.body.version).toBe(1);
-    expect(res.body.resources).toHaveLength(1);
-    expect(res.body.resources[0]).toBe("GET /weather/testnet");
+    expect(res.body.resources).toEqual(["GET /weather/testnet", "GET /weather-upto/testnet"]);
   });
 
   it("does not include mainnet weather route", async () => {

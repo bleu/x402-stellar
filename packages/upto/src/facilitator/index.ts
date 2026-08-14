@@ -9,8 +9,18 @@ import type {
 import { Keypair, rpc, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { getNetworkPassphrase } from "@x402/stellar";
 
-import { logger } from "../../../utils/logger.js";
-import { parseUptoPayload, settleOperation, type UptoAuthorization } from "./payload.js";
+import { parseUptoPayload, settleOperation, type UptoAuthorization } from "../payload.js";
+
+/**
+ * The slice of a structured logger this scheme uses. Kept minimal so the
+ * package does not depend on whichever logger the host application runs.
+ */
+export interface UptoLogger {
+  info(obj: Record<string, unknown>, msg: string): void;
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+
+const SILENT: UptoLogger = { info: () => {}, warn: () => {} };
 
 export interface UptoStellarSchemeOptions {
   /** Deployed UptoSettlement contract id, `C...`. */
@@ -23,6 +33,8 @@ export interface UptoStellarSchemeOptions {
   network: Network;
   /** Max fee in stroops the facilitator will pay per settle. */
   maxTransactionFeeStroops?: number;
+  /** Where settle outcomes are logged. Silent when not supplied. */
+  logger?: UptoLogger;
 }
 
 /**
@@ -43,6 +55,7 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
   private readonly network: Network;
   private readonly passphrase: string;
   private readonly maxFeeStroops: number;
+  private readonly logger: UptoLogger;
 
   constructor(options: UptoStellarSchemeOptions) {
     this.contractId = options.contractId;
@@ -51,10 +64,20 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     this.network = options.network;
     this.passphrase = getNetworkPassphrase(options.network);
     this.maxFeeStroops = options.maxTransactionFeeStroops ?? 100_000;
+    this.logger = options.logger ?? SILENT;
   }
 
+  /**
+   * What a buyer needs to build a payload without being told out of band: the
+   * settlement contract and the account that submits the settle, which the
+   * buyer must simulate against so its authorization stays detached.
+   */
   getExtra(): Record<string, unknown> | undefined {
-    return { areFeesSponsored: this.areFeesSponsored, contract: this.contractId };
+    return {
+      areFeesSponsored: this.areFeesSponsored,
+      contract: this.contractId,
+      settler: this.facilitator.publicKey(),
+    };
   }
 
   getSigners(): string[] {
@@ -74,10 +97,13 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     const mismatch = this.checkRequirements(payload, auth, requirements);
     if (mismatch) return mismatch;
 
-    const amount = this.resolveAmount(parsed.payload);
-    if (amount === undefined) {
-      return invalid("amount_exceeds_max", "settle amount exceeds the signed maxAmount");
+    // Verify runs before the handler, so `requirements.amount` is still the
+    // quoted cap. Holding it to the signed maxAmount is what stops a seller
+    // from quoting one ceiling and collecting a signature for another.
+    if (auth.maxAmount !== requirements.amount) {
+      return invalid("cap_mismatch", "authorization maxAmount does not match requirements amount");
     }
+    const amount = BigInt(auth.maxAmount);
 
     const window = await this.checkWindow(auth);
     if (window) return window;
@@ -119,9 +145,12 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
       );
     }
 
-    const amount = this.resolveAmount(parsed.payload);
+    const amount = settleAmount(auth, requirements);
     if (amount === undefined) {
-      return this.settleFailure("amount_exceeds_max", "settle amount exceeds the signed maxAmount");
+      return this.settleFailure(
+        "amount_exceeds_max",
+        `settle amount ${requirements.amount} is not within 0..${auth.maxAmount}`,
+      );
     }
 
     const window = await this.checkWindow(auth);
@@ -157,7 +186,10 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
         return this.settleFailure("settlement_failed", `transaction ${result.status}`);
       }
 
-      logger.info({ hash: sent.hash, amount: amount.toString(), payer: auth.from }, "upto settled");
+      this.logger.info(
+        { hash: sent.hash, amount: amount.toString(), payer: auth.from },
+        "upto settled",
+      );
       return {
         success: true,
         transaction: sent.hash,
@@ -207,8 +239,12 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     if (auth.payTo !== requirements.payTo) {
       return invalid("recipient_mismatch", "authorization payTo does not match requirements");
     }
-    if (auth.maxAmount !== requirements.amount) {
-      return invalid("cap_mismatch", "authorization maxAmount does not match requirements amount");
+    // By settle time `requirements.amount` has been rewritten to the charge, so
+    // `payload.accepted` is the only surviving record of the quoted ceiling.
+    // Anything reading it as the price -- the catalog does -- needs it backed by
+    // the signature rather than taken on the client's word.
+    if (payload.accepted.amount !== auth.maxAmount) {
+      return invalid("cap_mismatch", "accepted amount does not match the signed maxAmount");
     }
     return undefined;
   }
@@ -224,19 +260,8 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     return undefined;
   }
 
-  /** Actual settle amount, defaulting to the cap; undefined when it exceeds the cap. */
-  private resolveAmount(payload: {
-    authorization: UptoAuthorization;
-    amount?: string;
-  }): bigint | undefined {
-    const cap = BigInt(payload.authorization.maxAmount);
-    const amount = payload.amount === undefined ? cap : BigInt(payload.amount);
-    if (amount < 0n || amount > cap) return undefined;
-    return amount;
-  }
-
   private settleFailure(reason: string, message?: string): SettleResponse {
-    logger.warn({ reason, message }, "upto settle failed");
+    this.logger.warn({ reason, message }, "upto settle failed");
     return {
       success: false,
       transaction: "",
@@ -249,4 +274,21 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
 
 function invalid(reason: string, message: string): VerifyResponse {
   return { isValid: false, invalidReason: reason, invalidMessage: message };
+}
+
+/**
+ * What settle may charge: the amount the seller asked for, which core has
+ * already rewritten into `requirements.amount` from its settlement override.
+ * Undefined when it is outside `0..maxAmount`.
+ *
+ * Core does not clamp an override, so this check and the contract are the only
+ * things standing between a seller's typo and the buyer's whole ceiling.
+ */
+function settleAmount(
+  auth: UptoAuthorization,
+  requirements: PaymentRequirements,
+): bigint | undefined {
+  if (!/^\d+$/.test(requirements.amount)) return undefined;
+  const amount = BigInt(requirements.amount);
+  return amount > BigInt(auth.maxAmount) ? undefined : amount;
 }

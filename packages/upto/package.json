@@ -1,0 +1,44 @@
+{
+  "name": "@x402-stellar/upto",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./client": {
+      "import": "./dist/client/index.js",
+      "types": "./dist/client/index.d.ts"
+    },
+    "./server": {
+      "import": "./dist/server/index.js",
+      "types": "./dist/server/index.d.ts"
+    },
+    "./facilitator": {
+      "import": "./dist/facilitator/index.js",
+      "types": "./dist/facilitator/index.d.ts"
+    }
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^16.0.1",
+    "@x402/core": "^2.21.0",
+    "@x402/stellar": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.8"
+  }
+}

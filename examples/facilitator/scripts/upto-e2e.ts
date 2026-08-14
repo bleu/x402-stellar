@@ -15,8 +15,8 @@ import { Asset, Keypair } from "@stellar/stellar-sdk";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { getNetworkPassphrase } from "@x402/stellar";
 
-import { buildUptoPayload } from "../src/modules/facilitator/upto/client.js";
-import { UptoStellarScheme } from "../src/modules/facilitator/upto/scheme.js";
+import { buildUptoPayload } from "@x402-stellar/upto/client";
+import { UptoStellarScheme } from "@x402-stellar/upto/facilitator";
 
 function req(name: string, fallback?: string): string {
   const v = process.env[name] ?? fallback;
@@ -62,7 +62,6 @@ async function main(): Promise<void> {
     rpcUrl,
     network,
     facilitatorAddress: Keypair.fromSecret(facilitatorSecret).publicKey(),
-    amount: actual,
   });
 
   const payload: PaymentPayload = {
@@ -83,8 +82,11 @@ async function main(): Promise<void> {
   console.log("  ", JSON.stringify(verify));
   if (!verify.isValid) throw new Error(`verify rejected: ${verify.invalidReason}`);
 
+  // What the resource server does through `setSettlementOverrides`: core
+  // rewrites `requirements.amount` for the settle call only, so the cap the
+  // buyer signed is untouched and only the charge comes down.
   console.log(`settle ${actual} of cap ${cap}...`);
-  const settle = await scheme.settle(payload, requirements);
+  const settle = await scheme.settle(payload, { ...requirements, amount: actual.toString() });
   console.log("  ", JSON.stringify(settle));
   if (!settle.success) throw new Error(`settle failed: ${settle.errorReason}`);
 

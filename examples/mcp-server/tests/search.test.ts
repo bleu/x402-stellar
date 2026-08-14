@@ -121,12 +121,39 @@ describe("search_bazaar", () => {
   });
 
   it("marks a scheme it cannot sign as unpayable, allowlisted asset or not", async () => {
-    // Search and payment have to answer this identically. An upto-priced row in
-    // an asset we hold is still something paid_request will refuse, so calling it
-    // payable would send the agent at an endpoint it cannot buy.
+    // Search and payment have to answer this identically. A row priced under a
+    // scheme we hold no client for is still something paid_request will refuse,
+    // so calling it payable would send the agent at an endpoint it cannot buy.
+    const unsignable = resource({
+      accepts: [
+        {
+          scheme: "subscription",
+          network: NETWORK,
+          asset: TESTNET_USDC,
+          amount: "10000",
+          payTo: "G...",
+        },
+      ],
+    });
+    const client = await connect({
+      fetchImpl: (async () => searchResponse([unsignable])) as unknown as typeof globalThis.fetch,
+    });
+
+    const body = resultBody(
+      await client.callTool({ name: "search_bazaar", arguments: { query: "thing" } }),
+    );
+    const [first] = body.results as Record<string, unknown>[];
+
+    expect(first.payable).toBe(false);
+    expect(first.price).toMatchObject({ scheme: "subscription" });
+    // No USD figure either: it is not a price this wallet can act on.
+    expect(first.price).not.toHaveProperty("usd");
+  });
+
+  it("prices a ceiling-only row, because the wallet can sign one", async () => {
     const uptoOnly = resource({
       accepts: [
-        { scheme: "upto", network: NETWORK, asset: TESTNET_USDC, amount: "10000", payTo: "G..." },
+        { scheme: "upto", network: NETWORK, asset: TESTNET_USDC, amount: "30000", payTo: "G..." },
       ],
     });
     const client = await connect({
@@ -138,16 +165,22 @@ describe("search_bazaar", () => {
     );
     const [first] = body.results as Record<string, unknown>[];
 
-    expect(first.payable).toBe(false);
-    expect(first.price).toMatchObject({ scheme: "upto" });
-    // No USD figure either: it is not a price this wallet can act on.
-    expect(first.price).not.toHaveProperty("usd");
+    expect(first.payable).toBe(true);
+    // The ceiling is what gets quoted, so a maxUsdPrice filter compares against
+    // the most the call could cost rather than a guess at what it will.
+    expect(first.price).toMatchObject({ scheme: "upto", amountAtomic: "30000", usd: "0.003" });
   });
 
   it("quotes the signable option when a resource offers two schemes", async () => {
     const mixed = resource({
       accepts: [
-        { scheme: "upto", network: NETWORK, asset: TESTNET_USDC, amount: "1", payTo: "G..." },
+        {
+          scheme: "subscription",
+          network: NETWORK,
+          asset: TESTNET_USDC,
+          amount: "1",
+          payTo: "G...",
+        },
         { scheme: "exact", network: NETWORK, asset: TESTNET_USDC, amount: "10000", payTo: "G..." },
       ],
     });

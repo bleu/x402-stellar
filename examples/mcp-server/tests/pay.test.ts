@@ -20,6 +20,16 @@ function fakeScheme(): SchemeNetworkClient {
   };
 }
 
+/** Same, for the ceiling scheme: the seller picks the amount, not this. */
+function fakeUptoScheme(): SchemeNetworkClient {
+  return {
+    scheme: "upto",
+    async createPaymentPayload(x402Version) {
+      return { x402Version, payload: { authorization: {}, authEntryXdr: "AAAA" } };
+    },
+  };
+}
+
 function requirements(overrides: Partial<PaymentRequirements> = {}): PaymentRequirements {
   return {
     scheme: "exact",
@@ -53,7 +63,7 @@ function paymentRequired(options: PaymentRequirements[] = [requirements()]): Res
   });
 }
 
-function settled(transaction = "abc123", success = true): Response {
+function settled(transaction = "abc123", success = true, amount?: string): Response {
   return new Response(JSON.stringify({ answer: 42 }), {
     status: 200,
     headers: {
@@ -63,6 +73,7 @@ function settled(transaction = "abc123", success = true): Response {
         transaction,
         network: NETWORK,
         payer: PAYER,
+        ...(amount === undefined ? {} : { amount }),
       }),
     },
   });
@@ -91,12 +102,17 @@ function harness(responses: Response[], limits = { perCall: "0.01", session: "0.
     network: NETWORK as `${string}:${string}`,
     ability,
     budget,
-    createSchemeClient: fakeScheme,
+    createSchemeClients: () => [fakeScheme(), fakeUptoScheme()],
     fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,
     explorerBaseUrl: "https://stellar.expert/explorer/testnet/tx",
   });
 
   return { pay, budget, fetchImpl };
+}
+
+/** A 402 quoting a 0.003 ceiling, as the ceiling-priced route does. */
+function ceilingRequired(): Response {
+  return paymentRequired([requirements({ scheme: "upto", amount: "30000" })]);
 }
 
 describe("paid_request", () => {
@@ -195,21 +211,21 @@ describe("paid_request", () => {
   });
 
   it("tells an unsignable scheme apart from an unknown network", async () => {
-    // The facilitator serves upto; this wallet registers no client scheme for it.
-    // Both cases reach us as one message from the client, so the 402 we recorded
-    // is what makes the distinction, and the agent must not be told the network
-    // was wrong when the network was fine.
-    const { pay } = harness([paymentRequired([requirements({ scheme: "upto" })])]);
+    // This wallet registers no client scheme for `subscription`. An unknown
+    // scheme and an unknown network reach us as one message from the client, so
+    // the 402 we recorded is what makes the distinction, and the agent must not
+    // be told the network was wrong when the network was fine.
+    const { pay } = harness([paymentRequired([requirements({ scheme: "subscription" })])]);
 
     await expect(pay({ url: RESOURCE })).rejects.toMatchObject({
       code: "scheme_not_supported",
-      details: { offered: [`upto on ${NETWORK}`] },
+      details: { offered: [`subscription on ${NETWORK}`] },
     });
   });
 
   it("refuses an unsignable scheme even when the asset is allowlisted", async () => {
     const { pay, budget } = harness([
-      paymentRequired([requirements({ scheme: "upto", asset: TESTNET_USDC })]),
+      paymentRequired([requirements({ scheme: "subscription", asset: TESTNET_USDC })]),
     ]);
 
     await expect(pay({ url: RESOURCE })).rejects.toMatchObject({
@@ -220,12 +236,73 @@ describe("paid_request", () => {
 
   it("picks the signable scheme when the resource offers both", async () => {
     const { pay } = harness([
-      paymentRequired([requirements({ scheme: "upto", amount: "1" }), requirements()]),
+      paymentRequired([requirements({ scheme: "subscription", amount: "1" }), requirements()]),
       settled(),
     ]);
 
     const result = await pay({ url: RESOURCE });
     expect(result.settlement).toMatchObject({ success: true, amountAtomic: "10000" });
+  });
+
+  it("gives back what the ceiling did not spend", async () => {
+    const { pay, budget } = harness([ceilingRequired(), settled("abc123", true, "10000")]);
+
+    const result = await pay({ url: RESOURCE });
+
+    // Reserved 0.003 at signing, settled 0.001, so 0.002 goes back.
+    expect(budget.spent).toBe(toAtomic("0.001", BUDGET_DECIMALS));
+    expect(result.settlement).toMatchObject({
+      amountAtomic: "10000",
+      usd: "0.001",
+      reservedAtomic: "30000",
+      reservedUsd: "0.003",
+    });
+    expect(result.budget).toMatchObject({ spent: "0.001", remaining: "0.049" });
+  });
+
+  it("keeps the whole ceiling charged when the settlement does not say what it took", async () => {
+    const { pay, budget } = harness([ceilingRequired(), settled()]);
+
+    const result = await pay({ url: RESOURCE });
+
+    expect(budget.spent).toBe(toAtomic("0.003", BUDGET_DECIMALS));
+    expect(result.settlement).toMatchObject({ amountAtomic: "30000", usd: "0.003" });
+    expect(result.settlement).not.toHaveProperty("reservedAtomic");
+  });
+
+  it("reports one figure when the whole ceiling settled", async () => {
+    const { pay, budget } = harness([ceilingRequired(), settled("abc123", true, "30000")]);
+
+    const result = await pay({ url: RESOURCE });
+
+    expect(budget.spent).toBe(toAtomic("0.003", BUDGET_DECIMALS));
+    expect(result.settlement).toMatchObject({ amountAtomic: "30000" });
+    expect(result.settlement).not.toHaveProperty("reservedAtomic");
+  });
+
+  it("keeps the ceiling charged when the settlement is lost after signing", async () => {
+    const queue = [ceilingRequired()];
+    const fetchImpl = vi.fn(async () => {
+      const next = queue.shift();
+      if (!next) throw new Error("socket hang up");
+      return next;
+    });
+    const budget = new SessionBudget(
+      toAtomic("0.01", BUDGET_DECIMALS),
+      toAtomic("0.05", BUDGET_DECIMALS),
+    );
+    const pay = createPayer({
+      network: NETWORK as `${string}:${string}`,
+      ability,
+      budget,
+      createSchemeClients: () => [fakeScheme(), fakeUptoScheme()],
+      fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,
+    });
+
+    await expect(pay({ url: RESOURCE })).rejects.toMatchObject({
+      code: "settle_indeterminate",
+    });
+    expect(budget.spent).toBe(toAtomic("0.003", BUDGET_DECIMALS));
   });
 
   it("rejects a relative url and a non-http scheme", async () => {
@@ -281,7 +358,7 @@ describe("paid_request", () => {
       network: NETWORK as `${string}:${string}`,
       ability,
       budget,
-      createSchemeClient: fakeScheme,
+      createSchemeClients: () => [fakeScheme()],
       fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,
     });
 
@@ -303,7 +380,7 @@ describe("paid_request", () => {
       network: NETWORK as `${string}:${string}`,
       ability,
       budget,
-      createSchemeClient: fakeScheme,
+      createSchemeClients: () => [fakeScheme()],
       fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,
     });
 

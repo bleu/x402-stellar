@@ -11,12 +11,15 @@ The agent is told one URL: the facilitator. Everything else — which endpoint e
 
 The Stellar secret key is read from this package's own `.env` and stays in this process. The MCP client's config file carries only a command and a working directory, so the config can be shared or shown on screen without leaking anything.
 
-The facilitator never sees the key either. It receives a signed authorization for one exact transfer — a fixed amount, to a fixed recipient, of a fixed asset — and submits it. Non-custodial here is a property of what gets sent, not of the wallet.
+The facilitator never sees the key either. It receives a signed authorization for one transfer — to a fixed recipient, of a fixed asset — and submits it. Non-custodial here is a property of what gets sent, not of the wallet.
+
+With `exact` the amount is fixed too. With `upto` the signature fixes a ceiling and leaves the amount open, which is what lets the seller charge less; the facilitator could still take the whole ceiling whatever the seller asked for. The cap is the protection, so keep caps small and choose facilitators you trust.
 
 What bounds the damage if an agent is talked into spending by injected text (a catalog description and an API response both land in the model's context, and both are written by someone else):
 
 - `MAX_PAYMENT` caps one call; `SESSION_BUDGET` caps the process's whole lifetime.
-- `PAYABLE_ASSETS` is an allowlist, and only the `exact` scheme is signable. A 402 asking for anything else is refused before signing, so a hostile server cannot get a signature for a token we cannot value or a mechanism we did not audit.
+- `PAYABLE_ASSETS` is an allowlist, and only the `exact` and `upto` schemes are signable. A 402 asking for anything else is refused before signing, so a hostile server cannot get a signature for a token we cannot value or a mechanism we did not audit.
+- An `upto` price is checked against `MAX_PAYMENT` and the session budget at its ceiling, not at some hoped-for charge, so the caps bound the worst case rather than the advertised one.
 - Payment headers cannot be supplied by the caller, so the agent cannot forge one.
 - The MCP client asks the human to approve each tool call, which is where the URL and arguments become visible.
 
@@ -94,6 +97,8 @@ pnpm demo "current weather for a city" --max-usd 0.01
 
 Runs the same server and the same tools over an in-memory transport, so a failure can be reproduced in one command instead of by re-prompting a model. It searches, pays the top payable result using the example values the catalog declared, searches again to print the row's usage signals before and after, then calls once more so the session budget refuses — every beat of the recording, in order. `--refuse` shrinks the caps to nothing so the first call is rejected too.
 
+`--scheme upto` picks a ceiling-priced row instead of the first payable one, and prints the ceiling against the charge. Search still lists both rows either way, so the choice stays visible. On that path the closing refusal may not fire, because reconciling the first call gives budget back; `--refuse` still rehearses the refusal on its own.
+
 For the refusal to land on the second call, `SESSION_BUDGET` has to leave room for exactly one payment. With the endpoint at `0.001`, use:
 
 ```bash
@@ -125,6 +130,23 @@ A successful `paid_request`:
 }
 ```
 
+A ceiling-priced endpoint reports both numbers, because the reserve and the release both happen inside the one call:
+
+```json
+{
+  "settlement": {
+    "success": true,
+    "amountAtomic": "10000",
+    "usd": "0.001",
+    "reservedAtomic": "30000",
+    "reservedUsd": "0.003"
+  },
+  "budget": { "sessionLimit": "0.05", "spent": "0.001", "remaining": "0.049" }
+}
+```
+
+`reservedAtomic` and `reservedUsd` are absent when the two are the same number: always for `exact`, and for an `upto` that took its whole ceiling.
+
 Every failure carries a code from a closed set and a reason that is never null:
 
 ```json
@@ -139,13 +161,17 @@ Every failure carries a code from a closed set and a reason that is never null:
 
 Codes this server raises itself: `cap_exceeded`, `session_budget_exhausted`, `asset_not_allowed`, `network_not_supported`, `scheme_not_supported`, `invalid_url`, `forbidden_header`, `no_acceptable_payment_option`. Codes for a failure further down: `payment_required_malformed`, `verify_failed`, `settle_failed`, `settle_indeterminate`, `upstream_error`, `transport_error`. Discovery's: `search_unavailable`, `search_failed`. Anything unforeseen becomes `internal_error`.
 
-`network_not_supported` and `scheme_not_supported` are separate on purpose. The x402 client raises one message for both, so this server reads the 402's own `accepts` list to see which it really was — an endpoint charging in `upto` on a network we do support is a scheme problem, and saying otherwise would send the agent looking in the wrong place.
+`network_not_supported` and `scheme_not_supported` are separate on purpose. The x402 client raises one message for both, so this server reads the 402's own `accepts` list to see which it really was — an endpoint charging in a scheme we hold no client for, on a network we do support, is a scheme problem, and saying otherwise would send the agent looking in the wrong place.
 
 When the failure came from the facilitator or the resource server, its own `invalidReason` or `errorReason` appears in `details` word for word. Our code says which stage failed; theirs says why.
 
 ## Two behaviours worth knowing before you trust the numbers
 
-**Budget is charged at signing, not at success.** A payment we signed and sent may settle even when the answer never reaches us — `@x402/core` says as much about a settle timeout. So the allowance is consumed the moment a payment is signed and is never given back, and a payment that genuinely failed still costs one call's worth of budget. `settle_indeterminate` is the code for that case, and it is deliberately not a flavour of `settle_failed`. The alternative — crediting only confirmed successes — would let repeated timeouts spend past the ceiling while every individual check passed.
+**Budget is charged at signing, and given back only on certainty.** A payment we signed and sent may settle even when the answer never reaches us — `@x402/core` says as much about a settle timeout. So the allowance is consumed the moment a payment is signed, and a payment that genuinely failed still costs one call's worth of budget. `settle_indeterminate` is the code for that case, and it is deliberately not a flavour of `settle_failed`. The alternative — crediting only confirmed successes — would let repeated timeouts spend past the ceiling while every individual check passed.
+
+With `upto` what gets signed is a ceiling, so the ceiling is what gets charged: it is all the signature bounds, and the seller has not chosen yet. When the answer comes back saying it succeeded and naming the amount, the charge comes down to that amount and the difference returns to the session budget. A failure, a timeout, or a settlement that names no amount all keep the ceiling charged. Without the release, a one-cent ceiling that charges a tenth of a cent would drain a session budget many times over.
+
+One case is worse than it looks. When the endpoint answers 4xx it cancels the payment, so nothing settles on-chain — but the response carries no settlement to reconcile against, so the wallet keeps the whole ceiling charged for a call that cost nothing. Asking a weather endpoint for a city that does not exist therefore spends budget without spending money. `@x402/core` gives the resource server a cancellation hook but the client no signal it can trust, and guessing from "4xx and no settlement header" would hand free allowance to anything that strips headers. Keeping the charge is the same conservative choice as a timeout.
 
 **The budget resets when the process restarts.** It lives in memory, keyed to nothing. Restart the server and the session starts again with a full allowance.
 
@@ -163,6 +189,7 @@ The descriptions explain parameters and the payment protocol and nothing else �
 | --------------------- | ----------------------- | ------------------------------------------------------ |
 | `STELLAR_PRIVATE_KEY` | required                | The buyer's secret key. Never leaves this process      |
 | `STELLAR_NETWORK`     | `stellar:testnet`       | CAIP-2 network id                                      |
+| `STELLAR_RPC_URL`     | testnet Soroban RPC     | Simulates the settle an `upto` ceiling authorizes      |
 | `FACILITATOR_URL`     | `http://localhost:4022` | The Bazaar to search                                   |
 | `MAX_PAYMENT`         | `0.01`                  | Most one call may spend, in whole tokens               |
 | `SESSION_BUDGET`      | `0.05`                  | Most this process may spend, in whole tokens           |
@@ -172,7 +199,5 @@ The descriptions explain parameters and the payment protocol and nothing else �
 ## Not built
 
 An MCP tool that is itself paid, which `@x402/mcp` supports, needs an x402-aware MCP client. Claude Desktop and Claude Code are not, so only our own code could pay such a tool.
-
-Paying in `upto`. The facilitator serves that scheme when `UPTO_CONTRACT_ID` is set, but this wallet registers only the `exact` client scheme, because an upto payment means signing a ceiling against the settlement contract rather than an exact transfer. Endpoints priced that way show up in search marked `payable: false` and `paid_request` refuses them with `scheme_not_supported` rather than failing halfway.
 
 A signer in a separate process — so the process the model talks to could not sign at all — is the shape to reach for in production; here the key sits in the same process.
