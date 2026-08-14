@@ -3,7 +3,7 @@ import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { describe, expect, it } from "vitest";
 
 import { parseUptoPayload, type UptoStellarPayload } from "./payload.js";
-import { UptoStellarScheme } from "./scheme.js";
+import { UptoStellarScheme } from "./facilitator/index.js";
 
 const ASSET = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
 const BUYER = "GCRXEB4BNIMRSNUZNAXQS2S7ZV236ZZEAENFYUOZLLTIQ3QMTNQZQ55Y";

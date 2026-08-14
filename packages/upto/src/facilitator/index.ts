@@ -9,8 +9,18 @@ import type {
 import { Keypair, rpc, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { getNetworkPassphrase } from "@x402/stellar";
 
-import { logger } from "../../../utils/logger.js";
-import { parseUptoPayload, settleOperation, type UptoAuthorization } from "./payload.js";
+import { parseUptoPayload, settleOperation, type UptoAuthorization } from "../payload.js";
+
+/**
+ * The slice of a structured logger this scheme uses. Kept minimal so the
+ * package does not depend on whichever logger the host application runs.
+ */
+export interface UptoLogger {
+  info(obj: Record<string, unknown>, msg: string): void;
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+
+const SILENT: UptoLogger = { info: () => {}, warn: () => {} };
 
 export interface UptoStellarSchemeOptions {
   /** Deployed UptoSettlement contract id, `C...`. */
@@ -23,6 +33,8 @@ export interface UptoStellarSchemeOptions {
   network: Network;
   /** Max fee in stroops the facilitator will pay per settle. */
   maxTransactionFeeStroops?: number;
+  /** Where settle outcomes are logged. Silent when not supplied. */
+  logger?: UptoLogger;
 }
 
 /**
@@ -43,6 +55,7 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
   private readonly network: Network;
   private readonly passphrase: string;
   private readonly maxFeeStroops: number;
+  private readonly logger: UptoLogger;
 
   constructor(options: UptoStellarSchemeOptions) {
     this.contractId = options.contractId;
@@ -51,6 +64,7 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
     this.network = options.network;
     this.passphrase = getNetworkPassphrase(options.network);
     this.maxFeeStroops = options.maxTransactionFeeStroops ?? 100_000;
+    this.logger = options.logger ?? SILENT;
   }
 
   getExtra(): Record<string, unknown> | undefined {
@@ -157,7 +171,10 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
         return this.settleFailure("settlement_failed", `transaction ${result.status}`);
       }
 
-      logger.info({ hash: sent.hash, amount: amount.toString(), payer: auth.from }, "upto settled");
+      this.logger.info(
+        { hash: sent.hash, amount: amount.toString(), payer: auth.from },
+        "upto settled",
+      );
       return {
         success: true,
         transaction: sent.hash,
@@ -236,7 +253,7 @@ export class UptoStellarScheme implements SchemeNetworkFacilitator {
   }
 
   private settleFailure(reason: string, message?: string): SettleResponse {
-    logger.warn({ reason, message }, "upto settle failed");
+    this.logger.warn({ reason, message }, "upto settle failed");
     return {
       success: false,
       transaction: "",

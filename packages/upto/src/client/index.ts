@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { authorizeEntry, Keypair, rpc, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { getNetworkPassphrase } from "@x402/stellar";
 
-import { settleOperation, type UptoAuthorization, type UptoStellarPayload } from "./payload.js";
+import { settleOperation, type UptoAuthorization, type UptoStellarPayload } from "../payload.js";
 
 export interface BuildUptoPayloadParams {
   buyerSecret: string;

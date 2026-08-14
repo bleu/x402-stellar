@@ -15,8 +15,8 @@ import { Asset, Keypair } from "@stellar/stellar-sdk";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { getNetworkPassphrase } from "@x402/stellar";
 
-import { buildUptoPayload } from "../src/modules/facilitator/upto/client.js";
-import { UptoStellarScheme } from "../src/modules/facilitator/upto/scheme.js";
+import { buildUptoPayload } from "@x402-stellar/upto/client";
+import { UptoStellarScheme } from "@x402-stellar/upto/facilitator";
 
 function req(name: string, fallback?: string): string {
   const v = process.env[name] ?? fallback;

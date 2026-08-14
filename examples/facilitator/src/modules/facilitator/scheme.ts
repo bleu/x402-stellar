@@ -3,7 +3,7 @@ import { ExactStellarScheme } from "@x402/stellar/exact/facilitator";
 
 import { Env } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
-import { UptoStellarScheme } from "./upto/scheme.js";
+import { UptoStellarScheme } from "@x402-stellar/upto/facilitator";
 
 /**
  * Builds the exact-scheme handler from env config. Two modes:
@@ -60,5 +60,6 @@ export function createUptoStellarScheme(): UptoStellarScheme | undefined {
     rpcUrl: Env.stellarRpcUrl,
     network: Env.stellarNetwork,
     maxTransactionFeeStroops: Env.maxTransactionFeeStroops,
+    logger,
   });
 }
