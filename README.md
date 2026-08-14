@@ -2,14 +2,23 @@
 
 Tools, examples, and references for the [x402 protocol](https://www.x402.org/) on the Stellar network.
 
+For the components, the flows between them, and the data they keep, see [docs/architecture.md](docs/architecture.md).
+
 ## Repository Structure
 
 ```
 x402-stellar/
+├── contracts/                    # Soroban contracts
+│   └── upto-settlement/          # Cap enforcement for the upto scheme
+├── docs/
+│   └── architecture.md           # Components, flows, data, trust boundaries
 ├── examples/                     # Example applications
-│   ├── facilitator/              # Stellar facilitator service
+│   ├── client-cli/               # One-shot command-line payer
+│   ├── facilitator/              # Facilitator, Bazaar catalog, price feed
+│   ├── mcp-server/               # MCP tools: search the Bazaar, pay an endpoint
 │   └── simple-paywall/           # Paywall demo (server + client)
 │       └── docker-compose.yml
+├── packages/                     # Shared libraries
 ├── Dockerfile                    # Multi-target Dockerfile
 ├── package.json
 ├── pnpm-workspace.yaml
