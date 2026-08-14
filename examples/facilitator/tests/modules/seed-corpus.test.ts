@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { extractDiscoveryInfo } from "@x402/extensions/bazaar";
 
-import { SEED_CORPUS, seedPayloadOf } from "../../src/modules/catalog/seed-corpus.js";
+import { SEED_CORPUS, seedPayloadOf } from "../fixtures/seed-corpus.js";
 
 describe("seed corpus", () => {
   it("holds about twenty services", () => {

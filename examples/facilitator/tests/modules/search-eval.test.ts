@@ -6,7 +6,7 @@ import { extractDiscoveryInfo, declareDiscoveryExtension } from "@x402/extension
 import { createCatalogModule, type UsdPrices } from "../../src/modules/catalog/index.js";
 import { createMiniLmEmbedder, warmEmbedder } from "../../src/modules/catalog/embedder.js";
 import { toCatalogRecord } from "../../src/modules/catalog/record.js";
-import { SEED_CORPUS, seedPayloadOf } from "../../src/modules/catalog/seed-corpus.js";
+import { SEED_CORPUS, seedPayloadOf } from "../fixtures/seed-corpus.js";
 import { CatalogStore } from "../../src/modules/catalog/store.js";
 import { ASSET_DECIMALS, COINGECKO_IDS_BY_ASSET } from "../../src/modules/prices/index.js";
 
@@ -167,6 +167,17 @@ describe.skipIf(!TEST_DATABASE_URL)("search evaluation", () => {
     store = CatalogStore.connect(TEST_DATABASE_URL!, embedder);
     await store.dropSchemaForTests();
     await store.ensureSchema();
+
+    // The same fixed rates the injected feed reports, persisted because the
+    // maxUsdPrice ceiling is a SQL predicate over asset_usd_prices. Without
+    // these rows nothing is priceable and the ceiling correctly filters nothing.
+    const fetchedAt = new Date();
+    await store.savePrices(
+      [...COINGECKO_IDS_BY_ASSET].flatMap(([asset, coingeckoId]) => {
+        const usd = USD_PER_COIN[coingeckoId];
+        return usd === undefined ? [] : [{ asset, coingeckoId, usdPrice: String(usd), fetchedAt }];
+      }),
+    );
 
     // The synthetic corpus, through the same door a settlement uses.
     for (const entry of SEED_CORPUS) {

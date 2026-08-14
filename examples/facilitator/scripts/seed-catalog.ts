@@ -6,7 +6,7 @@ import { extractDiscoveryInfo } from "@x402/extensions/bazaar";
 
 import { Env } from "../src/config/env.js";
 import { createMiniLmEmbedder, warmEmbedder } from "../src/modules/catalog/embedder.js";
-import { SEED_CORPUS, seedPayloadOf } from "../src/modules/catalog/seed-corpus.js";
+import { SEED_CORPUS, seedPayloadOf } from "../tests/fixtures/seed-corpus.js";
 import { toCatalogRecord } from "../src/modules/catalog/record.js";
 import { CatalogStore } from "../src/modules/catalog/store.js";
 
