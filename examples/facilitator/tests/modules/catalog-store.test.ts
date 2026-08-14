@@ -105,6 +105,38 @@ describe.skipIf(!TEST_DATABASE_URL)("CatalogStore against Postgres", () => {
     expect(items[0].lastUpdated).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  /**
+   * The point of cataloguing the extension at all: a calling agent reads the
+   * parameter names from extensions.bazaar.info.input.queryParams instead of
+   * guessing them. A guess like ?city= often happens to work, which would let a
+   * demo look right while the claim was false, so this pins the whole path --
+   * stored, projected, and through the ranked search response.
+   */
+  it("carries the declared query parameters through to a search result", async () => {
+    await store.upsert({
+      resource: "https://api.example.com/observations",
+      type: "http",
+      method: "GET",
+      x402Version: 2,
+      accepts: [requirements],
+      description: "airport weather observations by station code",
+      extensions: {
+        bazaar: {
+          info: {
+            input: { type: "http", method: "GET", queryParams: { station: "EGLL" } },
+            output: { type: "json", example: { pressure_hpa: 1013 } },
+          },
+        },
+      },
+    });
+
+    const hits = await store.search("airport weather observations by station code", {}, 5);
+
+    expect(hits[0].extensions).toMatchObject({
+      bazaar: { info: { input: { queryParams: { station: "EGLL" } } } },
+    });
+  });
+
   it("gives each MCP tool sharing one endpoint its own row", async () => {
     const base = {
       resource: "https://mcp.example.com/rpc",
