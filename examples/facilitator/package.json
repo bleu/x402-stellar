@@ -13,6 +13,7 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "seed-catalog": "tsx scripts/seed-catalog.ts",
+    "upto-e2e": "tsx --env-file=.env scripts/upto-e2e.ts",
     "generate-channel-accounts": "tsx scripts/generate-channel-accounts.ts",
     "refund-accounts-from-env": "tsx scripts/refund-accounts-from-env.ts",
     "refund-accounts-from-remote": "tsx scripts/refund-accounts-from-remote.ts"

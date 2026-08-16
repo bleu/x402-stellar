@@ -5,11 +5,13 @@
  * it and settles a partial amount on-chain. Run against testnet with the
  * Phase 1 keys. Not part of the automated test suite (needs live keys + RPC).
  *
- *   tsx --env-file=<path-to-.env> scripts/upto-e2e.ts
+ *   pnpm --filter @x402-stellar/facilitator upto-e2e
  *
- * Env: BUYER_SECRET, FACILITATOR_SECRET (or FACILITATOR_STELLAR_PRIVATE_KEY),
- * MERCHANT_ADDRESS, UPTO_CONTRACT_ID (or CONTRACT_ID), optional STELLAR_RPC_URL,
- * STELLAR_NETWORK, ASSET_CODE, ASSET_ISSUER, CAP, ACTUAL.
+ * Env, all read from this package's .env: BUYER_SECRET, FACILITATOR_SECRET (or
+ * FACILITATOR_STELLAR_PRIVATE_KEY), MERCHANT_ADDRESS, UPTO_CONTRACT_ID (or
+ * CONTRACT_ID), optional STELLAR_RPC_URL, STELLAR_NETWORK, ASSET_CODE,
+ * ASSET_ISSUER, CAP, ACTUAL. The script plays the buyer as well as the
+ * facilitator, which is why it needs a buyer key the service itself never sees.
  */
 import { Asset, Keypair } from "@stellar/stellar-sdk";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
