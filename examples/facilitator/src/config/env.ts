@@ -92,6 +92,30 @@ export class Env {
   }
 
   /**
+   * Optional Postgres connection string. When set, the catalog module is
+   * enabled: settled resources are recorded and served at /discovery/resources.
+   */
+  static get databaseUrl(): string | undefined {
+    return process.env.DATABASE_URL || undefined;
+  }
+
+  /**
+   * Optional deployed UptoSettlement contract id (`C...`). When set, the
+   * facilitator also serves the `upto` scheme backed by this contract.
+   */
+  static get uptoContractId(): string | undefined {
+    return process.env.UPTO_CONTRACT_ID?.trim() || undefined;
+  }
+
+  /**
+   * Optional CoinGecko demo API key. Without it the USD price feed stays off
+   * and the `maxUsdPrice` search filter reports that it could not be applied.
+   */
+  static get coingeckoApiKey(): string | undefined {
+    return process.env.COINGECKO_API_KEY || undefined;
+  }
+
+  /**
    * Optional API key for authenticating requests to the facilitator.
    * When set, all /verify, /settle, and /supported requests must include an
    * `Authorization: Bearer <key>` header. Unset in dev mode = open access.

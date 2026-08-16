@@ -7,10 +7,13 @@
 #   client       – static SPA served by nginx (port 80)
 #
 # Optimizations:
-#   - Alpine base images (node:22-alpine) — ~86MB smaller per stage
 #   - No `pnpm deploy` — runs from workspace tree (fast builds)
 #   - Aggressive pruning of EVM/SVM/non-Stellar deps + client/build bloat
 #   - Build tools (turbo, typescript, eslint, etc.) excluded from runtime
+#
+# The node stages run on node:22-slim rather than Alpine, which costs ~86MB per
+# stage: onnxruntime-node ships glibc-only prebuilds and fails on musl even with
+# gcompat, and the facilitator needs it for MiniLM embeddings.
 #
 # Build context MUST be the repository root.
 #
@@ -22,7 +25,7 @@
 
 # ── Stage: base ──────────────────────────────────────────────
 # Install deps, build examples, then prune non-Stellar bloat.
-FROM node:22-alpine AS base
+FROM node:22-slim AS base
 
 RUN corepack enable
 
@@ -66,7 +69,8 @@ RUN pnpm build
 #   - @x402-stellar/paywall template bundles @stellar/stellar-sdk inline
 #   - @x402/express only imports @x402/core/server (viem/solana declared
 #     but never imported at runtime)
-#   - @x402/extensions dynamic import is in a try/catch (bazaar not used)
+#   - @x402/extensions/bazaar is imported by the facilitator's catalog, but it
+#     only pulls `ajv`, node's `url` and @x402/core/server -- not viem
 #   - @x402/core's require("@x402/paywall") is in a try/catch fallback
 #
 # Combined into a single RUN to avoid layer bloat from deletions.
@@ -125,9 +129,9 @@ RUN set -ex \
     && rm -rf node_modules/.pnpm/tsup@* \
     && rm -rf node_modules/.pnpm/pino-pretty@* \
     #
-    # ── Image processing / CSS (build-only) ──────────────────
-    && rm -rf node_modules/.pnpm/sharp@* \
-    && rm -rf node_modules/.pnpm/@img+* \
+    # ── CSS (build-only) ─────────────────────────────────────
+    # sharp and @img are NOT pruned: @huggingface/transformers depends on sharp,
+    # and the facilitator loads it at runtime for MiniLM embeddings.
     && rm -rf node_modules/.pnpm/lightningcss@* \
     && rm -rf node_modules/.pnpm/lightningcss-* \
     && rm -rf node_modules/.pnpm/tailwindcss@* \
@@ -185,7 +189,7 @@ RUN set -ex \
 
 
 # ── Stage: facilitator ──────────────────────────────────────
-FROM node:22-alpine AS facilitator
+FROM node:22-slim AS facilitator
 
 WORKDIR /app
 
@@ -197,11 +201,24 @@ COPY --from=base /app/examples/facilitator                       /app/examples/f
 EXPOSE 4022
 
 WORKDIR /app/examples/facilitator
+
+# Bake the MiniLM weights into the image so the running container needs no
+# HuggingFace egress, and a missing model is a build failure rather than a
+# first-query failure. ~25MB quantised.
+#
+# The weights land in @huggingface/transformers' own cache directory inside
+# node_modules, which this stage already carries, so the runtime finds them at
+# the same path the prefetch wrote. The library ignores HF_HOME, so pointing a
+# cache env var somewhere else would not move them.
+RUN node -e "import('@huggingface/transformers').then(({pipeline}) => \
+      pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {dtype: 'q8'}) \
+    ).then(() => console.log('MiniLM cached')).catch((e) => { console.error(e); process.exit(1); })"
+
 CMD ["node", "dist/index.js"]
 
 
 # ── Stage: server ────────────────────────────────────────────
-FROM node:22-alpine AS server
+FROM node:22-slim AS server
 
 WORKDIR /app
 

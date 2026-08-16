@@ -1,0 +1,178 @@
+# Bazaar MCP server
+
+An [MCP](https://modelcontextprotocol.io/) server that lets an AI agent find a paid API in the x402 Bazaar and pay for it, with no integration written in advance. It exposes two free tools:
+
+- **`search_bazaar`** — queries the facilitator's `GET /discovery/search`. Each result carries the endpoint's price, the parameter names it accepts, and an example call.
+- **`paid_request`** — calls an endpoint, and if it answers `402 Payment Required`, signs the payment locally and retries. Returns the response, the settlement transaction, and what is left of the spending budget.
+
+The agent is told one URL: the facilitator. Everything else — which endpoint exists, what it costs, what parameters it takes — it reads out of the catalog at runtime.
+
+## What holds the key
+
+The Stellar secret key is read from this package's own `.env` and stays in this process. The MCP client's config file carries only a command and a working directory, so the config can be shared or shown on screen without leaking anything.
+
+The facilitator never sees the key either. It receives a signed authorization for one exact transfer — a fixed amount, to a fixed recipient, of a fixed asset — and submits it. Non-custodial here is a property of what gets sent, not of the wallet.
+
+What bounds the damage if an agent is talked into spending by injected text (a catalog description and an API response both land in the model's context, and both are written by someone else):
+
+- `MAX_PAYMENT` caps one call; `SESSION_BUDGET` caps the process's whole lifetime.
+- `PAYABLE_ASSETS` is an allowlist, and only the `exact` scheme is signable. A 402 asking for anything else is refused before signing, so a hostile server cannot get a signature for a token we cannot value or a mechanism we did not audit.
+- Payment headers cannot be supplied by the caller, so the agent cannot forge one.
+- The MCP client asks the human to approve each tool call, which is where the URL and arguments become visible.
+
+Deliberately absent: any restriction of `paid_request` to catalogued URLs. Cataloging is settlement-observed — a resource enters the catalog only after someone pays it — so a catalog gate would mean nothing new could ever be discovered through this server.
+
+## Setup
+
+```bash
+cp .env.example .env      # add STELLAR_PRIVATE_KEY
+pnpm install
+pnpm build
+```
+
+The buyer account needs a testnet USDC trustline and a balance. `examples/client-cli/.env` already holds a funded throwaway key for this.
+
+Bring the rest of the stack up **in this order**, from the repository root:
+
+```bash
+cd examples/facilitator && docker compose up -d && cd -   # pgvector Postgres
+pnpm --filter @x402-stellar/facilitator dev               # wait for /health
+pnpm --filter @x402-stellar/facilitator seed-catalog       # 20 synthetic rows
+pnpm --filter @x402-stellar/simple-paywall-server dev     # the paid endpoint
+```
+
+The order is not cosmetic. The paywall server validates its facilitator at boot and exits if it cannot reach one, so starting it first leaves you with a dead process and a confusing `fetch failed` in its log.
+
+### Prime the catalog before you demo
+
+Seeding fills the catalog with twenty synthetic services. It does **not** put the local paid endpoint in there, because cataloging is settlement-observed: a resource appears only after someone pays it. On a fresh database the agent's first search cannot find the endpoint at all.
+
+So pay it once, with any client:
+
+```bash
+SERVER_URL=http://localhost:3001 pnpm --filter @x402-stellar/client-cli dev
+```
+
+After that the endpoint is in the catalog and ranks first for a weather query, and the agent's own payment increments its usage counters. No registration step exists — this is the mechanism working as designed, not a workaround.
+
+## Wiring it into an agent
+
+Claude Desktop, in `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "x402-bazaar": {
+      "command": "node",
+      "args": ["/absolute/path/to/examples/mcp-server/dist/index.js"],
+      "cwd": "/absolute/path/to/examples/mcp-server"
+    }
+  }
+}
+```
+
+Claude Code, in `.mcp.json` at the repository root:
+
+```json
+{
+  "mcpServers": {
+    "x402-bazaar": {
+      "command": "pnpm",
+      "args": ["--filter", "@x402-stellar/mcp-server", "dev"]
+    }
+  }
+}
+```
+
+`cwd` matters: `.env` is loaded relative to it. Neither config contains a secret.
+
+## Rehearsing without an agent
+
+```bash
+pnpm demo "current weather for a city" --max-usd 0.01
+```
+
+Runs the same server and the same tools over an in-memory transport, so a failure can be reproduced in one command instead of by re-prompting a model. It searches, pays the top payable result using the example values the catalog declared, searches again to print the row's usage signals before and after, then calls once more so the session budget refuses — every beat of the recording, in order. `--refuse` shrinks the caps to nothing so the first call is rejected too.
+
+For the refusal to land on the second call, `SESSION_BUDGET` has to leave room for exactly one payment. With the endpoint at `0.001`, use:
+
+```bash
+MAX_PAYMENT=0.01
+SESSION_BUDGET=0.0015
+```
+
+A limit the _user_ states in a prompt is not this budget: the agent passes that to `search_bazaar` as `maxUsdPrice`, which filters the catalog. Asking for something absurdly cheap therefore produces an empty search, not a payment refusal, so it does not exercise the rejection path.
+
+## Reading a result
+
+A successful `paid_request`:
+
+```json
+{
+  "url": "http://localhost:3001/weather/testnet?city=San+Francisco",
+  "status": 200,
+  "body": { "city": "San Francisco", "current": { "temperature_f": 63.4 } },
+  "paid": true,
+  "settlement": {
+    "success": true,
+    "transaction": "abc123...",
+    "network": "stellar:testnet",
+    "amountAtomic": "10000",
+    "usd": "0.001",
+    "explorerUrl": "https://stellar.expert/explorer/testnet/tx/abc123..."
+  },
+  "budget": { "sessionLimit": "0.05", "spent": "0.001", "remaining": "0.049" }
+}
+```
+
+Every failure carries a code from a closed set and a reason that is never null:
+
+```json
+{
+  "error": {
+    "code": "cap_exceeded",
+    "reason": "Payment of 0.02 exceeds the per-call limit of 0.01",
+    "details": { "quote": { "amountAtomic": "200000", "usd": "0.02" } }
+  }
+}
+```
+
+Codes this server raises itself: `cap_exceeded`, `session_budget_exhausted`, `asset_not_allowed`, `network_not_supported`, `scheme_not_supported`, `invalid_url`, `forbidden_header`, `no_acceptable_payment_option`. Codes for a failure further down: `payment_required_malformed`, `verify_failed`, `settle_failed`, `settle_indeterminate`, `upstream_error`, `transport_error`. Discovery's: `search_unavailable`, `search_failed`. Anything unforeseen becomes `internal_error`.
+
+`network_not_supported` and `scheme_not_supported` are separate on purpose. The x402 client raises one message for both, so this server reads the 402's own `accepts` list to see which it really was — an endpoint charging in `upto` on a network we do support is a scheme problem, and saying otherwise would send the agent looking in the wrong place.
+
+When the failure came from the facilitator or the resource server, its own `invalidReason` or `errorReason` appears in `details` word for word. Our code says which stage failed; theirs says why.
+
+## Two behaviours worth knowing before you trust the numbers
+
+**Budget is charged at signing, not at success.** A payment we signed and sent may settle even when the answer never reaches us — `@x402/core` says as much about a settle timeout. So the allowance is consumed the moment a payment is signed and is never given back, and a payment that genuinely failed still costs one call's worth of budget. `settle_indeterminate` is the code for that case, and it is deliberately not a flavour of `settle_failed`. The alternative — crediting only confirmed successes — would let repeated timeouts spend past the ceiling while every individual check passed.
+
+**The budget resets when the process restarts.** It lives in memory, keyed to nothing. Restart the server and the session starts again with a full allowance.
+
+## Ranking does not use usage
+
+Search results carry a `quality` block (`l30DaysTotalCalls`, `l30DaysUniquePayers`, `lastCalledAt`), and the ranking ignores it. The seeded catalog is synthetic, so the one endpoint anyone has actually paid would win every query on a usage boost, and that would demonstrate a popularity counter rather than search. The numbers are shown, not scored.
+
+## Tool descriptions name no services
+
+The descriptions explain parameters and the payment protocol and nothing else — no service, no domain, no subject area. Stating that `maxUsdPrice` is in US dollars is documentation; naming a kind of API to look for would be pre-baking the demo. A test greps the descriptions for the seed corpus's service names and demo hostnames and fails the build if any appear.
+
+## Environment
+
+| Variable              | Default                 | Meaning                                                |
+| --------------------- | ----------------------- | ------------------------------------------------------ |
+| `STELLAR_PRIVATE_KEY` | required                | The buyer's secret key. Never leaves this process      |
+| `STELLAR_NETWORK`     | `stellar:testnet`       | CAIP-2 network id                                      |
+| `FACILITATOR_URL`     | `http://localhost:4022` | The Bazaar to search                                   |
+| `MAX_PAYMENT`         | `0.01`                  | Most one call may spend, in whole tokens               |
+| `SESSION_BUDGET`      | `0.05`                  | Most this process may spend, in whole tokens           |
+| `PAYABLE_ASSETS`      | testnet USDC            | `network\|contract\|decimals\|symbol`, comma separated |
+| `LOG_LEVEL`           | `info`                  | Logs go to stderr; stdout is the JSON-RPC stream       |
+
+## Not built
+
+An MCP tool that is itself paid, which `@x402/mcp` supports, needs an x402-aware MCP client. Claude Desktop and Claude Code are not, so only our own code could pay such a tool.
+
+Paying in `upto`. The facilitator serves that scheme when `UPTO_CONTRACT_ID` is set, but this wallet registers only the `exact` client scheme, because an upto payment means signing a ceiling against the settlement contract rather than an exact transfer. Endpoints priced that way show up in search marked `payable: false` and `paid_request` refuses them with `scheme_not_supported` rather than failing halfway.
+
+A signer in a separate process — so the process the model talks to could not sign at all — is the shape to reach for in production; here the key sits in the same process.
